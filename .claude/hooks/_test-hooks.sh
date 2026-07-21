@@ -455,14 +455,14 @@ status: "ready-for-dev"
 STORY_EOF
 }
 
-# 7-1. #17 종료 + 완전한 StoryFile(9섹션 + [Source:]) → 통과(exit 0)
+# 7-1. #15 종료 + 완전한 StoryFile(9섹션 + [Source:]) → 통과(exit 0)
 _create_complete_story
-JSON="$(_subagent_json '#17')"
+JSON="$(_subagent_json '#15')"
 EC=$(CLAUDE_PROJECT_DIR="$TMPDIR_BASE" \
   bash "$HOOKS_DIR/artifact-verify.sh" <<< "$JSON" 2>/dev/null; echo $?)
-assert_exit "SubagentStop #17 + 완전한 StoryFile → 통과" 0 "$EC"
+assert_exit "SubagentStop #15 + 완전한 StoryFile → 통과" 0 "$EC"
 
-# 7-2. #17 종료 + [Source:] 없음 → 차단(exit 2)
+# 7-2. #15 종료 + [Source:] 없음 → 차단(exit 2)
 cat > "$_STORY_DIR/story-1-1-test-kr.md" <<'STORY_EOF'
 ---
 story_key: "1-1-test"
@@ -489,10 +489,10 @@ status: "ready-for-dev"
 ## project_context_reference
 컨텍스트
 STORY_EOF
-JSON="$(_subagent_json '#17')"
+JSON="$(_subagent_json '#15')"
 EC=$(CLAUDE_PROJECT_DIR="$TMPDIR_BASE" \
   bash "$HOOKS_DIR/artifact-verify.sh" <<< "$JSON" 2>/dev/null; echo $?)
-assert_exit "SubagentStop #17 + [Source:] 없음 → 차단(exit 2)" 2 "$EC"
+assert_exit "SubagentStop #15 + [Source:] 없음 → 차단(exit 2)" 2 "$EC"
 
 # 7-3. matthew 역할 종료 + developer_context 섹션 누락 → 차단(exit 2)
 cat > "$_STORY_DIR/story-1-1-test-kr.md" <<'STORY_EOF'
@@ -527,7 +527,7 @@ assert_exit "SubagentStop matthew + developer_context 누락 → 차단(exit 2)"
 JSON="$(_subagent_json 'phillip')"
 EC=$(CLAUDE_PROJECT_DIR="$TMPDIR_BASE" \
   bash "$HOOKS_DIR/artifact-verify.sh" <<< "$JSON" 2>/dev/null; echo $?)
-assert_exit "SubagentStop 비#17 역할(phillip) → fail-safe 통과" 0 "$EC"
+assert_exit "SubagentStop 비#15 역할(phillip) → fail-safe 통과" 0 "$EC"
 
 # 7-5. TaskCompleted(task 필드 있음) → SubagentStop 분기 비진입(회귀 방지)
 # readiness-report-kr.md는 4-4 테스트에서 생성됨 → W3 분기 통과

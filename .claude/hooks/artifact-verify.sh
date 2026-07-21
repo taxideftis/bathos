@@ -43,7 +43,7 @@ fi
 #   SubagentStop  = { role|agent_type|subagent_type|..., outputs, ... } — task 필드 없음
 #   TaskCompleted = { task.title, ... }                                 — task/title 필드 있음
 # R-3 수정: 페이로드의 역할 필드명이 런타임 버전마다 다를 수 있으므로(.role 단일 의존 시
-#   #17 종료를 미탐) 후보 필드를 폭넓게 조회한다. jq 부재 시 grep 폴백도 둔다.
+#   #15 종료를 미탐) 후보 필드를 폭넓게 조회한다. jq 부재 시 grep 폴백도 둔다.
 SUBAGENT_ROLE=""
 if command -v jq >/dev/null 2>&1; then
   _task_field="$(printf '%s' "$INPUT" | jq -r '.task // empty' 2>/dev/null || true)"
@@ -120,13 +120,13 @@ verify_story_file() {
 }
 
 # --------------------------------------------------------------------------
-# 3-b. SubagentStop 분기 — #17 Matthew 종료 시 StoryFile 완전성 검증 (B-3)
+# 3-b. SubagentStop 분기 — #15 Matthew 종료 시 StoryFile 완전성 검증 (B-3)
 # --------------------------------------------------------------------------
 # api-contracts §D: SubagentStop(artifact-verify) → StoryFile 스키마 검증
 # D1 완전성: 9섹션 + [Source:] 출처 표기(§A-1 계약 불변식 ②)
 # 미충족 시 exit 2(재컴파일 유도), 충족 시 exit 0. fail-safe: 다른 역할은 통과.
 if [[ -n "$SUBAGENT_ROLE" ]]; then
-  if printf '%s' "$SUBAGENT_ROLE" | grep -Eiq '#17|matthew|story[-_]engineer'; then
+  if printf '%s' "$SUBAGENT_ROLE" | grep -Eiq '#15|matthew|story[-_]engineer'; then
     _sa_errors=()
     _story_files_found=0
 
@@ -157,16 +157,16 @@ if [[ -n "$SUBAGENT_ROLE" ]]; then
     fi
 
     if [[ ${#_sa_errors[@]} -gt 0 ]]; then
-      printf '\n[BATHOS artifact-verify] ❌ StoryFile 완전성 미충족 — #17 재컴파일 필요\n' >&2
+      printf '\n[BATHOS artifact-verify] ❌ StoryFile 완전성 미충족 — #15 재컴파일 필요\n' >&2
       for _err in "${_sa_errors[@]}"; do
         printf '[BATHOS artifact-verify] • %s\n' "$_err" >&2
       done
-      printf '[BATHOS artifact-verify] #17 Matthew: StoryFile 보완 후 재제출하세요 (E-CTX-LOSS 방지)\n' >&2
+      printf '[BATHOS artifact-verify] #15 Matthew: StoryFile 보완 후 재제출하세요 (E-CTX-LOSS 방지)\n' >&2
       printf '[BATHOS artifact-verify] 참고: api-contracts.md §A-1, exceptions.md §2 E-CTX-LOSS\n' >&2
       exit 2
     fi
 
-    printf '[BATHOS artifact-verify] ✅ StoryFile 완전성 검증 통과 (#17 종료)\n' >&2
+    printf '[BATHOS artifact-verify] ✅ StoryFile 완전성 검증 통과 (#15 종료)\n' >&2
     exit 0
   fi
 

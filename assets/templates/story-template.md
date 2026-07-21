@@ -3,70 +3,140 @@
 원본: src/bmm-skills/4-implementation/bmad-create-story/template.md
 레포: bmad-code-org/BMAD-METHOD @ main (MIT © 2025 BMad Code, LLC)
 현지화: John(BATHOS Reverse Specialist) · 2026-06-29
-canonical 정렬: Paul(BATHOS Lead) · 2026-07-13 — `bathos story compile`(D1 완전성·D2 출처추적) 통과 포맷.
-규약: frontmatter(`---`, story_key/status/source_hash) + 필수 6 snake_case 섹션 + 조건부 4 섹션.
-     헤더는 snake_case 키 뒤에 한글 gloss 허용: `## story_requirements (스토리 요구사항)`.
-     기술 주장에는 [Source: <경로>#<섹션>] 태그를 단다. developer_context는 절대 비우지 않는다.
+패키지 배치: Timothy(BATHOS Doc Specialist) · 2026-06-29
 -->
+
+# 스토리 {{epic_num}}.{{story_num}}: {{story_title}}
+
+Status: ready-for-dev
+<!-- 상태값: backlog → ready-for-dev → in-progress → in-review → done -->
+<!-- 검증은 선택. dev-story 전 품질 점검을 원하면 story-context-quality 체크리스트 실행. -->
+
+## 스토리(Story)
+
+As a {{role}},
+I want {{action}},
+so that {{benefit}}.
+
+## 인수 기준(Acceptance Criteria)
+
+1. [에픽/PRD에서 가져온 인수 기준 — BDD 형식 권장]
+2. ...
+
+## 작업/하위작업(Tasks / Subtasks)
+
+- [ ] 작업 1 (AC: #1)
+  - [ ] 하위작업 1.1
+- [ ] 작업 2 (AC: #2)
+  - [ ] 하위작업 2.1
+
 ---
-story_key: "{{epic}}-{{story}}-{{slug}}"
-status: "ready-for-dev"
-source_hash: "{{source_hash}}"
-# 상태값: backlog → ready-for-dev → in-progress → in-review → done
+
+## Developer Context (개발자 컨텍스트) ← **가장 중요**
+
+<!-- create-story 워크플로우가 채우는 핵심 섹션. 구현자가 이 섹션만 보고도 착수 가능해야 한다. -->
+
+### 이 스토리에서 무엇을 구현하는가
+[한 문단 요약]
+
+### 중요한 제약·전제
+- [아키텍처·보안·성능 제약]
+
+### 해서는 안 되는 것
+- [anti-pattern, 기존 코드 회귀 금지 항목]
+
 ---
 
-# 스토리 {{epic}}.{{story}}: {{story_title}}
+## Architecture Compliance (아키텍처 준수)
 
-## story_requirements (스토리 요구사항)
+<!-- [Source: .agent-team/04-architecture/XXX.md#Section] 형식으로 출처 명기 -->
 
-As a {{role}}, I want {{action}}, so that {{benefit}}.
+- 관련 아키텍처 패턴·결정:
+- 준수해야 할 API 계약:
+- 데이터 스키마 관련 사항:
 
-**인수조건(AC):**
-- AC1: {{검증 가능한 수용 기준}} [Source: {{ref}}]
-- AC2: …
+---
 
-## developer_context (개발자 컨텍스트)
+## Library / Framework Requirements (라이브러리·프레임워크 요구사항)
 
-<!-- 가장 중요. 구현자가 이 파일만 보고 착수하도록 배경·설계 요약을 자족적으로 채운다(비우면 E-CTX-LOSS). -->
-{{설계 요약·핵심 결정·데이터 흐름·해서는 안 되는 것}} [Source: {{arch_ref}}]
+<!-- 최신 안정버전·breaking change·보안 패치·deprecated 포함 -->
 
-## architecture_compliance (아키텍처 준수)
+| 라이브러리/프레임워크 | 버전 | 비고 |
+|----------------------|------|------|
+| [이름] | [버전] | [breaking/보안/deprecated 여부] |
 
-{{준수할 아키텍처 패턴·API 계약·데이터 스키마; 없으면 "해당 제약 없음" 명시}} [Source: {{arch_ref}}]
+---
 
-## library_framework_requirements (라이브러리·프레임워크 요구사항)
+## File Structure Requirements (파일 구조 요구사항)
 
-{{사용 라이브러리·런타임·버전(breaking/보안/deprecated); 최소면 "기존 스택/표준 라이브러리만"}} [Source: {{ref}}]
+<!-- 프로젝트 구조와의 정합 — 신규/수정 파일 목록 -->
 
-## file_structure_requirements (파일 구조 요구사항)
+```
+[신규 또는 수정할 파일 경로 목록]
+```
 
-| 파일 | 작업(신규/수정/삭제) |
-|------|----------------------|
-| `{{path}}` | 신규 |
+---
 
-## testing_requirements (테스트 요구사항)
+## Testing Requirements (테스트 요구사항)
 
-- 단위: {{대상 함수/모듈}}
-- 통합/E2E: {{대상 플로우}} [Source: {{ref}}]
+<!-- 단위/통합/E2E 각각 요구사항 -->
 
-## project_context_reference (프로젝트 컨텍스트 참조)
+- **단위 테스트**: [대상 함수/모듈]
+- **통합 테스트**: [대상 API/플로우]
+- **E2E**: [대상 유저 플로우]
 
-USP→CF→US→SS 트레이스: {{trace}}. [Source: project-context-kr.md#0-1]
+---
 
-## previous_story_intelligence (선행 스토리 지능)
+## Dev Notes (개발 노트)
 
-{{직전 스토리에서 확립된 패턴·피해야 할 함정; story=1이면 "선행 없음"}} [Source: {{ref}}]
+- 관련 아키텍처 패턴·제약
+- 손대야 할 소스 트리 구성요소
+- 테스트 표준 요약
 
-## git_intelligence (git/저장소 지능)
+### 이전 스토리 인텔리전스 (Previous Story Intelligence)
 
-{{최근 커밋 패턴·의존성 변화·제품 트리 규약(신규 vs 확장)}} [Source: project-context-kr.md#3]
+<!-- story_num > 1 일 때 채움. 직전 스토리에서 배운 패턴·결정·주의사항 -->
 
-## latest_tech_information (최신 기술 정보)
+- [이전 스토리에서 확립된 패턴]
+- [피해야 할 함정]
 
-{{웹리서치 결과(breaking·보안·deprecated); 무관하면 그 취지 명시(Search Before Building)}} [Source: {{ref}}]
+### Git Intelligence
 
-## dev_notes (개발 노트·리스크·우선순위)
+<!-- 최근 5커밋 기반 패턴·의존성 변화 -->
 
-- 리스크: 비차단 리스크는 `CONCERNS:` 앵커로 표기(→ `/bathos-debt` 수집).
-- 우선순위·의존: {{Must/Should/Could · 선행 의존}}
-- 구현 기록(Dev Agent Record)·File List는 구현 중 dev가 append.
+- [최근 변경 패턴]
+
+### Latest Tech Information
+
+<!-- 웹리서치 결과: breaking change·보안·deprecated -->
+
+- [최신 기술 정보]
+
+### Project Context Reference
+
+<!-- 프로젝트 헌법(project-context-kr.md)의 핵심 참조 -->
+- [Source: project-context-kr.md#관련-섹션]
+
+---
+
+## Dev Agent Record (구현 기록)
+
+### 사용 모델(Agent Model Used)
+
+{{agent_model_name_version}}
+
+### 디버그 로그 참조
+
+[링크 또는 없음]
+
+### 완료 노트 목록(Completion Notes List)
+
+- [완료 시 기록]
+
+### 파일 목록(File List)
+
+<!-- ⚠️ 중요: 이 목록은 다음 스토리의 "이전 스토리 인텔리전스" 입력이 됩니다(연속성 D4). -->
+
+| 파일 경로 | 상태 (신규/수정/삭제) |
+|-----------|----------------------|
+| [경로] | [신규/수정] |
