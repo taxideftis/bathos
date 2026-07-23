@@ -215,7 +215,7 @@ Exit 코드: `0` 성공 · `1` 오류 · `2` 게이트 FAIL (훅이 차단에 �
 
 | 커맨드 | 서브커맨드 | 목적 |
 |---|---|---|
-| `state` | `validate`, `show` | 단일 진실 원천 — `manifest.json` 스키마 검증 및 검사 |
+| `state` | `init`, `validate`, `show` | 단일 진실 원천 `manifest.json` 생성·스키마 검증·검사 |
 | `route` | `decide`, `show` | Scale-Adaptive 레벨 추천 (stdin/`--stakes-json`; `--confirm <0-4>`로 기록) |
 | `wave` | `init`, `activate`, `show` | 7웨이브 상태 전이 (동시성 ≤ 3 강제) |
 | `gate` | `verdict`, `show` | 게이트 판정 기록 / 조회 (PASS/CONCERNS/FAIL; FAIL → exit 2) |
@@ -225,6 +225,7 @@ Exit 코드: `0` 성공 · `1` 오류 · `2` 게이트 FAIL (훅이 차단에 �
 | `doctor` | — | **설치/연결 프리플라이트** — `BATHOS_BIN`, `jq`, Agent Teams 플래그, `settings.json` hooks 블록(주석 키 무한대기), 훅 실행 비트, manifest 스키마, 감사 체인 |
 
 ```bash
+bathos -s _state state init --codename MYPROJECT       # 스키마 유효 manifest seed 생성
 bathos -s _state state validate                       # validate manifest.json
 bathos -s _state gate verdict Implementation PASS Matthew
 bathos -s _state gate show                            # latest Implementation gate (JSON)

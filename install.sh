@@ -70,12 +70,15 @@ $(say "Done. Next steps:")
        export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 
   3) Open Claude Code in your project and drive the pipeline:
-       /team-kickoff
+       /team-kickoff                     # seeds a schema-valid manifest via 'bathos state init'
        /route /abs/path/to/project
        /wave1-discovery /abs/path   …  /wave6-verify-report /abs/path
        /team-confirm
 
   Try the engine directly:
+     # Seed a schema-valid manifest.json (kickoff does this for you):
+     "$BIN" -s .agent-team/_state state init --codename MYPROJECT
+
      echo '{"scope":"feature","novelty":true,"regulation_ip":false,"team_size":"medium"}' \\
        | "$BIN" --state-dir .agent-team/_state route decide
 

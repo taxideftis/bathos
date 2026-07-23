@@ -215,7 +215,7 @@ Exit-Codes: `0` Erfolg · `1` Fehler · `2` Gate FAIL (von Hooks zum Blockieren 
 
 | Befehl | Unterbefehle | Zweck |
 |---|---|---|
-| `state` | `validate`, `show` | Einzige Wahrheitsquelle — Schema-Validierung & Inspektion von `manifest.json` |
+| `state` | `init`, `validate`, `show` | Erstellen, validieren und prüfen der zentralen `manifest.json` |
 | `route` | `decide`, `show` | Skalenadaptive Level-Empfehlung (stdin/`--stakes-json`; `--confirm <0-4>` hält fest) |
 | `wave` | `init`, `activate`, `show` | 7-Wellen-Zustandsübergänge (Parallelität ≤ 3 erzwungen) |
 | `gate` | `verdict`, `show` | Gate-Urteile aufzeichnen / lesen (PASS/CONCERNS/FAIL; FAIL → Exit 2) |
@@ -225,6 +225,7 @@ Exit-Codes: `0` Erfolg · `1` Fehler · `2` Gate FAIL (von Hooks zum Blockieren 
 | `doctor` | — | **Installations-/Verdrahtungs-Preflight** — `BATHOS_BIN`, `jq`, Agent-Teams-Flag, `settings.json`-Hooks-Block (Kommentar-Key-Hänger), Hook-Ausführungsbits, Manifest-Schema, Audit-Kette |
 
 ```bash
+bathos -s _state state init --codename MYPROJECT       # schema-validen Manifest-Seed erstellen
 bathos -s _state state validate                       # validate manifest.json
 bathos -s _state gate verdict Implementation PASS Matthew
 bathos -s _state gate show                            # latest Implementation gate (JSON)

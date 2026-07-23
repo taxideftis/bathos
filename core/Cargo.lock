@@ -140,6 +140,7 @@ dependencies = [
  "clap",
  "crossterm",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

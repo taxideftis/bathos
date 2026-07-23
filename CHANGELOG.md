@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bathos state init`** — creates a schema-valid `manifest.json` seed for
+  `/team-kickoff`, replacing error-prone LLM hand-authoring across runtimes.
+  Existing state is preserved unless `--force` is explicitly supplied.
+
 - **팀 역할 체계 16역할 → 17역할** — Thomas(#12) 다음에 **Michael (#13, Security
   Specialist)** 을 신설했다. 방어적(defensive) 웹·사이버 보안 감사·하드닝 전담 —
   승인 범위 내 취약점을 증거 기반으로 식별·분류·보고(CWE/OWASP/CVSS·SARIF)하고

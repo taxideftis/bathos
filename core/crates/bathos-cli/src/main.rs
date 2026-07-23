@@ -5,6 +5,7 @@
 //!
 //! ## Subcommand structure
 //! ```text
+//! bathos state init       # Create a schema-valid manifest.json seed
 //! bathos state validate   # Validate manifest.json schema (B1)
 //! bathos state show       # Print current manifest.json state (B1)
 //! bathos gate verdict     # Record gate verdict (B3 implementation)
@@ -37,7 +38,7 @@ use anyhow::{Context, Result};
 use bathos_gate_engine::{GateEngine, GateIssue, VerdictAggregator};
 use bathos_plug::{ModuleRegistry, PlugManager};
 use bathos_state::{
-    model::GateType,
+    model::{GateType, Project},
     model_plan::{self, ModelPlan, Runtime, SessionBackend},
     schema::validate_manifest,
     store::StateStore,
@@ -213,6 +214,27 @@ enum StateAction {
     Validate,
     /// manifest.json의 현재 상태를 JSON으로 출력한다.
     Show,
+    /// 스키마 유효 manifest.json seed를 생성한다 (kickoff 부트스트랩).
+    ///
+    /// `Project::new` + `StateStore::create`(쓰기 전 스키마 검증)로 항상 유효한 seed를 만든다.
+    /// 기존 manifest가 있으면 `--force` 없이는 덮어쓰지 않는다.
+    Init {
+        /// 제품 코드명 (codename, 예: BATHOS).
+        #[arg(long)]
+        codename: String,
+        /// Scale-Adaptive 레벨 (0~4). 미지정 시 0 (잠정 — /route에서 확정).
+        #[arg(long, default_value_t = 0)]
+        level: u8,
+        /// 주 언어 코드 (기본 ko).
+        #[arg(long, default_value = "ko")]
+        lang: String,
+        /// 프로젝트 ID (미지정 시 bathos-<uuid> 자동생성; 지정 시 'bathos-' 접두 필수).
+        #[arg(long)]
+        project_id: Option<String>,
+        /// 기존 manifest.json을 덮어쓴다.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 // ── gate subcommands (B3 implementation) ─────────────────────────────────────
@@ -772,6 +794,64 @@ fn handle_state(action: StateAction, state_dir: &Path) -> Result<i32> {
             let json = serde_json::to_string_pretty(project).context("프로젝트 직렬화 실패")?;
 
             println!("{}", json);
+            Ok(0)
+        }
+
+        StateAction::Init {
+            codename,
+            level,
+            lang,
+            project_id,
+            force,
+        } => {
+            // Schema-valid manifest seed for kickoff bootstrap.
+            // Rationale: the engine previously had no create/init command, so the very
+            // first manifest.json was hand-authored by an LLM against a strict schema —
+            // unreliable across runtimes (Codex-run kickoff produced an invalid
+            // manifest). This stamps a guaranteed-valid seed.
+            let manifest_path = state_dir.join("manifest.json");
+            if manifest_path.exists() && !force {
+                eprintln!(
+                    "[E-STATE-EXISTS] manifest.json이 이미 존재합니다: {}",
+                    manifest_path.display()
+                );
+                eprintln!("[bathos state init] 덮어쓰려면 --force 를 지정하세요.");
+                return Ok(1);
+            }
+            if level > 4 {
+                eprintln!("[E-ARG] --level 은 0~4 여야 합니다 (받음: {level}).");
+                return Ok(1);
+            }
+            if codename.is_empty() {
+                eprintln!("[E-ARG] --codename 은 비어 있을 수 없습니다.");
+                return Ok(1);
+            }
+            if lang.chars().count() < 2 {
+                eprintln!("[E-ARG] --lang 은 두 글자 이상이어야 합니다 (받음: {lang}).");
+                return Ok(1);
+            }
+            // Project::new fills the schema-required defaults (project_id=bathos-<uuid>,
+            // status=Active, created=now(RFC3339), empty relation vecs).
+            let mut project = Project::new(codename, level);
+            project.lang = lang;
+            if let Some(pid) = project_id {
+                if pid.strip_prefix("bathos-").is_none_or(str::is_empty) {
+                    eprintln!(
+                        "[E-ARG] --project-id 는 'bathos-' 뒤에 식별자가 있어야 합니다 (받음: {pid})."
+                    );
+                    return Ok(1);
+                }
+                project.project_id = pid;
+            }
+            let project_id = project.project_id.clone();
+            // StateStore::create validates the manifest against the JSON Schema before
+            // the atomic write, so a successful return guarantees a valid seed.
+            StateStore::create(state_dir, project)
+                .with_context(|| format!("state seed 생성 실패: {}", state_dir.display()))?;
+            println!(
+                "[bathos state init] ✓ manifest.json 생성: {} (project_id={project_id}, level={level})",
+                manifest_path.display()
+            );
             Ok(0)
         }
     }
@@ -1957,6 +2037,7 @@ fn is_executable(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     fn keys(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -1991,5 +2072,102 @@ mod tests {
         let (bad, unknown) = classify_hook_keys(k.iter());
         assert!(bad.is_empty());
         assert_eq!(unknown, vec!["BogusEvent".to_string()]);
+    }
+
+    fn state_init_action(
+        codename: &str,
+        level: u8,
+        project_id: Option<&str>,
+        force: bool,
+    ) -> StateAction {
+        StateAction::Init {
+            codename: codename.to_string(),
+            level,
+            lang: "en".to_string(),
+            project_id: project_id.map(str::to_string),
+            force,
+        }
+    }
+
+    #[test]
+    fn state_init_creates_schema_valid_manifest_for_all_levels() {
+        for level in 0..=4 {
+            let dir = TempDir::new().unwrap();
+            let code = handle_state(
+                state_init_action("BATHOS", level, Some("bathos-cli-test"), false),
+                dir.path(),
+            )
+            .unwrap();
+            assert_eq!(code, 0);
+
+            let manifest = std::fs::read_to_string(dir.path().join("manifest.json")).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+            validate_manifest(&value).unwrap();
+            assert_eq!(value["codename"], "BATHOS");
+            assert_eq!(value["current_level"], level);
+            assert_eq!(value["lang"], "en");
+            assert_eq!(value["project_id"], "bathos-cli-test");
+        }
+    }
+
+    #[test]
+    fn state_init_preserves_existing_manifest_without_force_and_replaces_with_force() {
+        let dir = TempDir::new().unwrap();
+        assert_eq!(
+            handle_state(
+                state_init_action("ORIGINAL", 1, Some("bathos-original"), false),
+                dir.path(),
+            )
+            .unwrap(),
+            0
+        );
+        let manifest_path = dir.path().join("manifest.json");
+        let original = std::fs::read_to_string(&manifest_path).unwrap();
+
+        assert_eq!(
+            handle_state(
+                state_init_action("REPLACEMENT", 2, Some("bathos-replacement"), false),
+                dir.path(),
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(std::fs::read_to_string(&manifest_path).unwrap(), original);
+
+        assert_eq!(
+            handle_state(
+                state_init_action("REPLACEMENT", 2, Some("bathos-replacement"), true),
+                dir.path(),
+            )
+            .unwrap(),
+            0
+        );
+        let replaced: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        assert_eq!(replaced["codename"], "REPLACEMENT");
+        assert_eq!(replaced["current_level"], 2);
+        assert_eq!(replaced["project_id"], "bathos-replacement");
+    }
+
+    #[test]
+    fn state_init_rejects_invalid_level_and_project_id_without_writing() {
+        for action in [
+            state_init_action("BATHOS", 5, Some("bathos-valid"), false),
+            state_init_action("BATHOS", 0, Some("invalid"), false),
+            state_init_action("BATHOS", 0, Some("bathos-"), false),
+            state_init_action("", 0, Some("bathos-valid"), false),
+        ] {
+            let dir = TempDir::new().unwrap();
+            assert_eq!(handle_state(action, dir.path()).unwrap(), 1);
+            assert!(!dir.path().join("manifest.json").exists());
+        }
+
+        let dir = TempDir::new().unwrap();
+        let mut invalid_lang = state_init_action("BATHOS", 0, Some("bathos-valid"), false);
+        if let StateAction::Init { lang, .. } = &mut invalid_lang {
+            *lang = "x".to_string();
+        }
+        assert_eq!(handle_state(invalid_lang, dir.path()).unwrap(), 1);
+        assert!(!dir.path().join("manifest.json").exists());
     }
 }

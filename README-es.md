@@ -215,7 +215,7 @@ Códigos de salida: `0` éxito · `1` error · `2` puerta FAIL (usado por los ho
 
 | Comando | Subcomandos | Propósito |
 |---|---|---|
-| `state` | `validate`, `show` | Fuente única de verdad — validación e inspección del esquema de `manifest.json` |
+| `state` | `init`, `validate`, `show` | Crea, valida e inspecciona la fuente única de verdad `manifest.json` |
 | `route` | `decide`, `show` | Recomendación de nivel adaptable a la escala (stdin/`--stakes-json`; `--confirm <0-4>` registra) |
 | `wave` | `init`, `activate`, `show` | Transiciones de estado de las 7 olas (concurrencia ≤ 3 aplicada) |
 | `gate` | `verdict`, `show` | Registrar / leer veredictos de puerta (PASS/CONCERNS/FAIL; FAIL → salida 2) |
@@ -225,6 +225,7 @@ Códigos de salida: `0` éxito · `1` error · `2` puerta FAIL (usado por los ho
 | `doctor` | — | **Preverificación de instalación/conexión** — `BATHOS_BIN`, `jq`, flag de Agent Teams, bloque de hooks de `settings.json` (cuelgue por clave de comentario), bits de ejecución de hooks, esquema del manifest, cadena de auditoría |
 
 ```bash
+bathos -s _state state init --codename MYPROJECT       # crea un manifest seed válido según el esquema
 bathos -s _state state validate                       # validate manifest.json
 bathos -s _state gate verdict Implementation PASS Matthew
 bathos -s _state gate show                            # latest Implementation gate (JSON)

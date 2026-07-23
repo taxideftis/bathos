@@ -264,7 +264,7 @@ Exit codes: `0` success · `1` error · `2` gate FAIL (used by hooks to block).
 
 | Command | Subcommands | Purpose |
 |---|---|---|
-| `state` | `validate`, `show` | Single source of truth — `manifest.json` schema validation & inspection |
+| `state` | `init`, `validate`, `show` | Create, validate, and inspect the `manifest.json` single source of truth |
 | `route` | `decide`, `show` | Scale-adaptive level recommendation (stdin/`--stakes-json`; `--confirm <0-4>` records) |
 | `wave` | `init`, `activate`, `show` | 7-wave state transitions (concurrency ≤ 3 enforced) |
 | `gate` | `verdict`, `show` | Record / read gate verdicts (PASS/CONCERNS/FAIL; FAIL → exit 2) |
@@ -274,6 +274,7 @@ Exit codes: `0` success · `1` error · `2` gate FAIL (used by hooks to block).
 | `doctor` | — | **Install/wiring preflight** — `BATHOS_BIN`, `jq`, Agent Teams flag, `settings.json` hooks block (comment-key hang), hook exec bits, manifest schema, audit chain |
 
 ```bash
+bathos -s _state state init --codename MYPROJECT       # create a schema-valid manifest seed
 bathos -s _state state validate                       # validate manifest.json
 bathos -s _state gate verdict Implementation PASS Matthew
 bathos -s _state gate show                            # latest Implementation gate (JSON)

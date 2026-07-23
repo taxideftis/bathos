@@ -212,9 +212,15 @@ stakes를 레벨로 옮기는 추천 규칙은 `bathos-router`가 계산한다. 
 
 ### 6.1 `bathos state` — 상태 SSOT (B1)
 ```bash
+bathos --state-dir .agent-team/_state state init \
+       --codename MYPROJECT                            # 스키마 유효 manifest.json seed 생성
 bathos --state-dir .agent-team/_state state validate   # manifest.json JSON Schema 검증 (VALID/위반목록)
 bathos --state-dir .agent-team/_state state show        # 현재 상태 JSON 출력
 ```
+
+`state init`은 기본 `level=0`, `lang=ko`, 자동 `project_id=bathos-<uuid>`로
+최소 유효 상태를 만든다. 기존 manifest는 `--force` 없이는 덮어쓰지 않는다.
+`/team-kickoff`가 이 명령을 호출하므로 일반 사용자는 직접 실행할 필요가 없다.
 
 ### 6.2 `bathos gate` — 게이트 판정 (B3)
 ```bash
