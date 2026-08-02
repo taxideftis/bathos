@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/team-kickoff`, replacing error-prone LLM hand-authoring across runtimes.
   Existing state is preserved unless `--force` is explicitly supplied.
 
+- **Codex CLI runtime porting layer** — added the Codex-native distribution path for the
+  BATHOS workflow: `.agents/skills/**` skills, `.codex/agents/*.toml` subagents,
+  `.codex/hooks.json` project hooks, `dist/codex-plugin/**` plugin bundle assets, and
+  `.codex-out/**` legacy prompt/agent scaffold output. The adapter now includes Codex
+  careful/freeze hooks, SessionStart resume guidance, `probe.sh` drift diagnostics,
+  `bathos runtime` host detection, run-role CI coverage, and generated-skill drift checks.
+  Target baseline is Codex CLI v0.145.0+; authenticated live walkthrough (`story-20`) and
+  `SessionEnd` behavior remain explicitly documented as release-readiness verification
+  items rather than claimed complete.
+
 - **팀 역할 체계 16역할 → 17역할** — Thomas(#12) 다음에 **Michael (#13, Security
   Specialist)** 을 신설했다. 방어적(defensive) 웹·사이버 보안 감사·하드닝 전담 —
   승인 범위 내 취약점을 증거 기반으로 식별·분류·보고(CWE/OWASP/CVSS·SARIF)하고

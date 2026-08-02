@@ -81,6 +81,12 @@ jobs:
       - name: Run Codex adapter hook harness (self-stubbed, no binary)
         run: bash codex-adapter/hooks/_test-codex-hooks.sh
 
+      - name: Run Codex run-role.sh smoke test (T8, self-stubbed codex — story-18/SS12)
+        run: bash codex-adapter/_test-run-role.sh
+
+      - name: Check Codex emission drift (E-EMIT-DRIFT — story-18, script owned by Andrew)
+        run: bash scripts/check-codex-drift.sh
+
   windows:
     name: Windows (engine build · test · PowerShell hook lint)
     runs-on: windows-latest

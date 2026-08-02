@@ -12,6 +12,9 @@
 //! - **fingerprint cache** (`fingerprint`, new in Dynamis): risky-change diff fingerprint normalization / re-approval prevention (SS1 · CF-A1)
 //! - **model plan** (`model_plan`, W2 panes/model design): per-role model/runtime selection
 //!   SSOT (`_state/model-plan.json`) — resolve priority chain + GLM/Codex mixed-batch validation
+//! - **runtime host detection** (`runtime_host`, ADR-CX-01): pure env classification of which
+//!   CLI host runtime (`claude`|`codex`|`unknown`) the current process is running under — never
+//!   persisted, orthogonal to `model_plan::SessionBackend`
 //!
 //! ## Usage example
 //! ```rust,no_run
@@ -40,6 +43,7 @@ pub mod error;
 pub mod fingerprint;
 pub mod model;
 pub mod model_plan;
+pub mod runtime_host;
 pub mod schema;
 pub mod store;
 

@@ -50,5 +50,23 @@ Paul(0·리드/CEO렌즈) · John(1·리버스) · Caleb(2·시장분석 +W0 Ana
 - **원격 개발:** `/remote-dev`(Remote Control 셋업·가이드 — 내 머신 세션을 폰/웹에서 조종, `_state`·안전훅 유지). ⚠️ 클라우드형(Web/Routines)은 fresh clone이라 BATHOS 상태·훅 부재 → 파이프라인 부적합. 상세 비교: `docs/COMMANDS-kr.md`.
 - **교육:** `/lecture`(David 튜터 강의안 생성).
 
+## Codex 팀 실행 오케스트레이션 (Codex CLI 전용 — Claude Code Agent Teams에는 미적용)
+
+> Codex에는 Claude Code의 Agent Teams 같은 별도 오케스트레이터 프로세스가 없습니다 — **이 절 자체가
+> 오케스트레이터**입니다(ADR-CX-04 결정 2항). Codex가 루트 지침으로 이 파일을 읽으므로, 여기 적힌
+> 규칙이 곧 팀 실행 런타임 규칙입니다. 표준 문구 정본: `.agent-team/08-impl-notes/stephen-orchestration.md`
+> (각 `.codex/agents/*.toml`의 `developer_instructions`도 동일 문구를 중복 인용합니다 — 이중 방어).
+
+- **W2 순차 게이트(스폰 분할 패턴)**: Joshua 단독 스폰 → 산출 파일 확인(`.agent-team/03-service-planning/*` 존재·비어있지 않음 확인) → James∥Jonnathan 병렬 스폰. 다른 웨이브도 이 패턴(게이트 역할 단독 선행 → 산출 확인 → 병렬)을 따르세요.
+- **동시 활성 ≤3**: `[agents] max_concurrent_threads_per_session = 3`([문서확정] — Codex 공식 subagents 문서 `[agents]` 전역 설정 테이블. 라이브 효력 자체는 ⚠️미검증)로 설정하세요. 이 상한은 상류 기술 한계 추종이 아니라 **BATHOS의 토큰 비용 정책**(CLAUDE.md §0)입니다 — 상류가 더 높은 동시성을 허용하더라도 BATHOS 웨이브 운영은 3을 넘기지 않습니다.
+- **중첩 스폰 금지(물리 차단 아님 — 정직 표기)**: 서브에이전트로 스폰된 팀원은 추가로 서브에이전트를 스폰하지 마세요. `max_depth` 류 config 강제 상한이 현재 Codex 공식 문서에서 확인되지 않아(D3), 남은 방어선은 **이 절 + 각 TOML의 developer_instructions 이중 명기**뿐입니다(지침 강제 — 위반을 코드로 막지 않습니다). 준수 여부는 SubagentStart 로그로 사후 검증하세요. (향후 실측에서 `max_depth`가 복원되면 config 3중 방어로 승격 — 재검토 트리거.)
+- **산출물 = 디스크 파일 강제**: 서브에이전트의 반환값은 리드에게 오는 **요약뿐**입니다 — 요약을 원본으로 신뢰하지 말고, 항상 소유 경로의 디스크 파일을 산출물의 SSOT로 삼으세요. 스폰 지침에 "결과는 파일로 남기고, 반환 요약에는 그 경로를 적을 것"을 포함하세요.
+- **모델 지정(Codex custom agent file 계약)**: 공식 subagents 문서 기준, custom agent TOML이 `model`/`model_reasoning_effort`를 지정하면 그 값이 spawn 시점 값보다 우선합니다. BATHOS 역할별 매핑은 `.agent-team/08-impl-notes/stephen-model-mapping.md`가 정본입니다. **런타임 버전(리드 확정)**: Codex CLI **v0.145.0 이상**을 전제로 합니다(PR #32749로 model/reasoning_effort 오버라이드가 기본 복원된 릴리스). **알려진 잔존 제약(⚠️커뮤니티 재현·비[LIVE])**: 상위 그룹 모델(`gpt-5.6-sol`)이 부모일 때는 v0.145.0+에서도 자식 서브에이전트가 named custom-agent 파일(`agent_type` 선택)을 자동으로 고르지 못하고 부모 설정을 상속할 수 있습니다(OpenAI Codex GitHub Issue #31814 계열의 후속 PR 미확인, 2026-07). 완전 해소하려면 사용자가 직접 `~/.codex/config.toml`에 `[features.multi_agent_v2] hide_spawn_agent_metadata = false`를 설정해야 합니다(저장소가 자동 편집하지 않음 — 설치 안내는 W6 `docs/codex-adapter-kr.md`). 회피책·근거 전문은 `stephen-model-mapping.md` §3~§4를 참조하세요.
+
+### 운영 수칙 L1/L2/L3 (UX 패리티 격차 고지 — `ux-parity-limits.md`)
+
+- **L3(중간 지시 불가)**: Codex 팀원에게는 중간 지시를 보낼 수 없습니다. 지시는 스폰 시 완결하고, 수정은 재스폰으로 하세요(스폰 프롬프트 자족성 — W3 Matthew의 스토리 응축이 Codex에서 더 중요해지는 구조적 이유입니다).
+- **L1/L2(자동 종료 절차 부재)**: Codex에는 SessionEnd 훅 3단 종료(저장→리포트→종료)가 없습니다. 작업 마무리 전 `$save-session` 실행을 권장합니다.
+
 ## 권장 흐름
 `/team-kickoff` → `/wave0-analysis`(선택) → `/wave1-discovery` → `/wave2-design` *(필요 시 `/autoplan`로 락인)* → **`/wave3-story-gate`**(PASS/CONCERNS면 진입) → `/wave3-ip-research`(W4·선택) → `/wave4-implement`(W5) → `/wave5-verify-report`(W6) → `/team-confirm`. 위험 작업 전 `/guard`. (규모에 따라 scale-adaptive로 일부 웨이브 생략.)

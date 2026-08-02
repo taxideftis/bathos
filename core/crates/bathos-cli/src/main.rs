@@ -21,6 +21,7 @@
 //! bathos plug enable <id> # Enable a module (B4)
 //! bathos plug disable <id># Disable a module (B4)
 //! bathos audit append     # Append an audit log entry (B-1 fix: single Rust writer)
+//! bathos runtime          # Report claude|codex|unknown CLI host runtime (SS13, CT-ENGINE-5)
 //! ```
 //!
 //! ## Exit code convention (hook integration)
@@ -40,6 +41,7 @@ use bathos_plug::{ModuleRegistry, PlugManager};
 use bathos_state::{
     model::{GateType, Project},
     model_plan::{self, ModelPlan, Runtime, SessionBackend},
+    runtime_host,
     schema::validate_manifest,
     store::StateStore,
     Verdict,
@@ -175,6 +177,16 @@ enum Commands {
         /// 렌더 주기(초) — tmux 위임 시 그대로 전달, TUI는 tick 간격으로 사용.
         #[arg(long, default_value_t = 2)]
         interval: u64,
+    },
+    /// 현재 CLI 호스트 런타임(claude|codex|unknown)을 보고한다(SS13, CT-ENGINE-5, ADR-CX-01).
+    ///
+    /// 순수 env 분류(`runtime_host::detect`) — 훅/플러그인 실행 컨텍스트 밖(맨 셸)에서는
+    /// unknown이 정답이다(버그 아님). **리포트 전용 — 게이트가 아니다**: exit은 unknown
+    /// 포함 항상 0(엔진 exit 규약의 2=게이트 FAIL 전용 의미를 이 커맨드에 부여하지 않는다).
+    Runtime {
+        /// 단일행 compact JSON으로 출력({"schema":"bathos/runtime-detect@1","host":...}).
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -431,7 +443,7 @@ fn wave_role_slugs(wave_id: &str) -> Option<&'static [&'static str]> {
             "thomas-code-reviewer",
             "timothy-doc-specialist",
             "matthias-qa-validator",
-            "mishael-security-specialist",
+            "michael-security-specialist",
             "hananiah-refactoring-specialist",
             "martin-monitoring-reporter",
         ]),
@@ -544,7 +556,47 @@ fn run(cli: Cli) -> Result<i32> {
             wave,
             interval,
         } => Ok(handle_panes(mode, path, wave, interval)),
+        Commands::Runtime { json } => Ok(handle_runtime(json)),
     }
+}
+
+/// `bathos runtime [--json]` (SS13, CT-ENGINE-5) — reports (never gates) which CLI host runtime
+/// this process is executing under. Always returns exit 0, including `unknown`: this is a
+/// report, not a gate (the engine's exit-2 convention stays reserved for gate FAIL only — see
+/// the module doc comment's exit-code table).
+fn handle_runtime(json: bool) -> i32 {
+    // W-RUNTIME-FORCE-INVALID (exceptions.md §4): `runtime_host::detect` itself stays pure (no
+    // I/O, so it's the unit-testable env-closure function story-12 §2.2 specifies) and silently
+    // falls through past an invalid override rather than warning — so the one-line stderr
+    // warning belongs at this CLI layer. This re-checks the same three valid values `detect`
+    // checks internally; duplicating that one match arm here is cheaper than threading a warning
+    // field through `HostDetection` just to carry it out of a function that's supposed to have
+    // no side effects.
+    if let Ok(v) = std::env::var("BATHOS_FORCE_HOST") {
+        if !matches!(v.as_str(), "claude" | "codex" | "unknown") {
+            eprintln!(
+                "[bathos runtime] ⚠ BATHOS_FORCE_HOST='{}' 무효(claude|codex|unknown만 허용) — 무시하고 실감지 진행",
+                v
+            );
+        }
+    }
+
+    let detection = runtime_host::detect(&|k| std::env::var(k).ok());
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "bathos/runtime-detect@1",
+                "host": detection.host.as_str(),
+                "source": detection.source,
+                "evidence": detection.evidence,
+            })
+        );
+    } else {
+        println!("{}", detection.host.as_str());
+    }
+    0
 }
 
 /// `bathos inspect <sub>` delegation — forwards to the single `bathos-inspect` (read-only crate).
@@ -1978,6 +2030,11 @@ fn handle_doctor(root: &Path, state_dir: &Path, modules_dir: &Path) -> Result<i3
         println!("· 감사 로그 없음(아직 활동 전 — 정상)");
     }
 
+    // 9. Codex sub-checks (SS13, runtime-abstraction-design.md §7 — additive: new helper + 1 call)
+    let (codex_errors, codex_warns) = doctor_codex_section(root);
+    errors += codex_errors;
+    warns += codex_warns;
+
     println!("────────────────────────────────────────");
     if errors == 0 {
         println!("결과: PASS (경고 {})", warns);
@@ -1989,6 +2046,92 @@ fn handle_doctor(root: &Path, state_dir: &Path, modules_dir: &Path) -> Result<i3
         );
         Ok(1)
     }
+}
+
+/// SS13 "Codex 서브체크" (runtime-abstraction-design.md §7) — additive to `handle_doctor`: a new
+/// helper + the single call site above. Every check 1-8 above stays byte-identical; these five
+/// are informational for non-Codex users. Absence of Codex-specific assets is `⚠` (expected for
+/// anyone not using Codex), never `✗` — the one exception is a hooks.json that exists but fails
+/// to parse, since that's a real defect regardless of which runtime the reader uses.
+fn doctor_codex_section(root: &Path) -> (u32, u32) {
+    let mut errors = 0u32;
+    let mut warns = 0u32;
+
+    println!("────────────────────────────────────────");
+    println!("Codex 서브체크 (SS13 — 부재는 비-Codex 사용자에겐 정상)");
+
+    // 9a. codex CLI on PATH.
+    if command_exists("codex") {
+        println!("✓ codex CLI 발견됨");
+    } else {
+        println!("⚠ codex CLI 없음(PATH) — Codex 런타임 미사용 시 정상");
+        warns += 1;
+    }
+
+    // 9b. .codex/hooks.json — presence + JSON parse (a parse *failure* is a real defect).
+    let hooks_json = root.join(".codex/hooks.json");
+    match std::fs::read_to_string(&hooks_json) {
+        Err(_) => {
+            println!("⚠ .codex/hooks.json 없음 — Codex 게이트/저장 훅 미배선");
+            warns += 1;
+        }
+        Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(_) => println!("✓ .codex/hooks.json 유효 JSON"),
+            Err(e) => {
+                println!("✗ .codex/hooks.json JSON 파싱 실패: {}", e);
+                errors += 1;
+            }
+        },
+    }
+
+    // 9c. .agents/skills/ — at least one SKILL.md (to-codex.sh emission target).
+    let skills_dir = root.join(".agents/skills");
+    let skill_count = std::fs::read_dir(&skills_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().join("SKILL.md").exists())
+                .count()
+        })
+        .unwrap_or(0);
+    if skill_count > 0 {
+        println!("✓ .agents/skills/ SKILL.md {}개", skill_count);
+    } else {
+        println!("⚠ .agents/skills/ 에 SKILL.md 없음 — scripts/to-codex.sh --write 로 방출 필요");
+        warns += 1;
+    }
+
+    // 9d. .codex/agents/*.toml — at least one (run-role.sh's E-CODEX-TOML-ABSENT preflight, A8).
+    let agents_dir = root.join(".codex/agents");
+    let toml_count = std::fs::read_dir(&agents_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("toml"))
+                .count()
+        })
+        .unwrap_or(0);
+    if toml_count > 0 {
+        println!("✓ .codex/agents/*.toml {}개", toml_count);
+    } else {
+        println!("⚠ .codex/agents/*.toml 없음 — run-role.sh가 E-CODEX-TOML-ABSENT로 종료 예정(A8)");
+        warns += 1;
+    }
+
+    // 9e. RuntimeHost detection — informational only, unknown is never ⚠/✗ (§5 unknown 의미론).
+    let detection = runtime_host::detect(&|k| std::env::var(k).ok());
+    match detection.host {
+        runtime_host::RuntimeHost::Unknown => {
+            println!("· RuntimeHost 감지: unknown(해당 없음 — 훅/플러그인 컨텍스트 밖)")
+        }
+        h => println!(
+            "· RuntimeHost 감지: {} (source={})",
+            h.as_str(),
+            detection.source
+        ),
+    }
+
+    (errors, warns)
 }
 
 /// Classifies hooks block keys into (comment/invalid keys, unknown event keys).

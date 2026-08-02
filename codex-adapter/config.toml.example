@@ -1,14 +1,19 @@
 # =============================================================================
 # BATHOS codex-adapter 훅 등록 예시
-# 실측 기반: Codex CLI v0.144.5 (macos-x86_64), 실제 설치 바이너리에서 확인
-# (2026-07-16). 하드코딩된 스키마 필드·이벤트명은 이 설치본에서 직접 확인한
-# 값이며, 문서 추정이 아니다 — 단, **버전 고정**이므로 다른 버전으로
-# 업그레이드하면 `codex features list`와 아래 항목을 재확인할 것(§재확인).
+# **타겟 버전: Codex CLI v0.145.0+**(2026-07-21 stable) — 리드 결정(2026-07-23,
+# 사용자 확정: 역할별 모델 매핑 작동 우선, Stephen 조사 근거)으로 v0.144.5에서
+# 이동했다. 아래 실측 사실 요약 자체는 v0.144.5(macos-x86_64, 2026-07-16, P5)
+# 설치본에서 실제로 확인한 값이다 — 그 기록을 고쳐 쓰지 않는다(날조 금지).
+# v0.145.0+ 기준 재실측은 probe.sh(story-03, CT-PROBE)의 몫이며, 라이브 인증
+# 세션이 있어야 완결된다(story-20 이관) — 이 파일은 그 재실측 전까지 v0.144.5
+# 실측값을 최선의 근사로 유지하되(D1/D2 드리프트 대비 matcher는 이미 광폭화
+# 완료 — ADR-CX-02), "버전 고정" 문구는 제거해 v0.145.0+ 업그레이드가 이미
+# 전제임을 명확히 한다.
 #
 # 복사 대상: ~/.codex/config.toml  (hooks.json 병용 시 병합·경고될 수 있음)
 # <BATHOS_ROOT>를 실제 절대경로로 치환할 것. 예: /Users/you/dev/bathos-dynamis
 #
-# 실측 사실 요약(설치 시 재확인 권장 — 버전 고정 v0.144.5):
+# 실측 사실 요약(v0.144.5 설치본 기준 — v0.145.0+ 재실측은 probe.sh 몫):
 #   - hooks 기능 = stable(실험적 아님) · 기본 활성. `codex features list`에서
 #     `hooks  stable  true`로 확인됨.
 #   - 유효 이벤트(HookEventNameWire): PreToolUse, PostToolUse,
@@ -17,30 +22,41 @@
 #     — 아래 [[hooks.Stop]]이 그 근사다.
 #   - PreToolUse stdin 필드(snake_case, 실측): hook_event_name, tool_name,
 #     tool_input, session_id, cwd, source, transcript_path, command.
-#   - 실제 tool_name 값: shell / exec_command(셸 실행) / apply_patch(파일
-#     편집). `Bash`는 존재하지 않는다(P4가 가정했던 값 — 실측으로 폐기됨).
+#   - 실측 tool_name 값(이 설치본): shell / exec_command(셸 실행) / apply_patch
+#     (파일 편집). `Bash`/`Edit`/`Write`는 이 설치본에서는 관측되지 않았으나,
+#     2026-07-23 공식 문서는 이들을 별칭으로 서술한다(D2 드리프트) — matcher는
+#     실측 3종+별칭 3종 합집합으로 광폭화됐다(ADR-CX-02, 아래 [[hooks.PreToolUse]]).
 #   - hook 설정 스키마 필드: matcher, command, commandWindows(Windows 전용
 #     명령 — Windows 경로가 실제로 존재함을 뜻함), timeoutSec, async,
 #     statusMessage, enabled, env, source, agent.
 #   - 차단 규약: exit 2 = 차단(+stderr 사유). JSON decision 출력도 가능
 #     (PreToolUseDecisionWire) — 이 어댑터는 exit code만 사용(단순성).
 #
-# 재확인 항목(버전 업그레이드 시):
-#   1. `codex features list`로 hooks stable/활성 여부 재확인.
-#   2. tool_name 값이 여전히 shell/exec_command/apply_patch인지(PreToolUse
-#      훅의 stderr 로깅 또는 신규 문서로).
-#   3. 라이브 인증 세션(auth)에서의 실동작은 이 설치본에서 미실증 — 키 없이
-#      스키마·계약만 확인했다(정직 표기, 날조 금지).
+# 재확인 항목(v0.145.0+ 타겟 확정에 따른 최우선 순위 — probe.sh 실행 대상):
+#   1. `codex features list`로 hooks stable/활성 여부 재확인(v0.144.5에서는
+#      `hooks  stable  true` 확인됨 — v0.145.0+에서도 stable 유지되는지).
+#   2. tool_name 값이 여전히 shell/exec_command/apply_patch인지, 아니면
+#      공식 문서가 서술하는 별칭(Bash/Edit/Write)이 실제로 오는지(D2 드리프트
+#      — matcher는 이미 6종 합집합으로 광폭화돼 있어 어느 쪽이든 발화한다).
+#   3. 라이브 인증 세션(auth)에서의 실동작은 v0.144.5 설치본에서도 v0.145.0+에서도
+#      미실증 — 키 없이 스키마·계약만 확인했다(정직 표기, 날조 금지 — story-20 이관).
 # =============================================================================
 
-# --- W3 게이트: 소스 쓰기(apply_patch) + 웨이브 진입 명령(shell/exec_command) 인터셉트 ---
+# --- W3 게이트: 소스 쓰기(apply_patch/Edit/Write) + 웨이브 진입 명령
+#     (shell/exec_command/Bash) 인터셉트 ---
 # 각 훅 항목은 [[hooks.<Event>]] 배열의 테이블 하나(matcher/command 등을 같은
 # 테이블에 직접 기술 — 실측 스키마에 별도 중첩 ".hooks" 배열은 없다).
+#
+# 이 파일은 보조 지위다(CT-WIRE-HOOKS secondary) — 정본은 <repo>/.codex/hooks.json
+# (프로젝트 스코프, trust 1회, story-02)이다. 이 예시는 유저 레벨(~/.codex/config.toml)
+# 다중 프로젝트 사용자를 위해 존치한다.
 [[hooks.PreToolUse]]
-matcher = "^(shell|exec_command|apply_patch)$"
-# 실측 tool_name 3종만 매칭(Bash는 존재하지 않으므로 포함하지 않는다). matcher가
-# 이 셋 중 하나로 좁혀져 있어도 스크립트 내부에서 다시 T1/T2 트리거 여부를
-# 판정하므로 이중 안전(과탐해도 verdict FAIL 상태에서만 영향).
+matcher = "^(Bash|shell|exec_command|apply_patch|Edit|Write)$"
+# ADR-CX-02(2026-07-23) 광폭 matcher: v0.144.5 실측 3종(shell/exec_command/
+# apply_patch) + 공식 문서가 서술하는 별칭 3종(Bash/Edit/Write)의 합집합 —
+# 어느 버전 세계에서도 발화를 보장한다(D2 드리프트 대응, story-01). matcher가
+# 6종으로 넓어져도 스크립트 내부(pretooluse-gate.sh T1/T2 case)가 대칭으로
+# 넓어져 있으므로 이중 안전(과탐해도 verdict FAIL 상태에서만 영향).
 command = '/bin/bash "<BATHOS_ROOT>/codex-adapter/hooks/pretooluse-gate.sh"'
 timeoutSec = 20
 statusMessage = "BATHOS W3 gate check"
@@ -50,7 +66,10 @@ statusMessage = "BATHOS W3 gate check"
 # commandWindows = 'powershell -File "<BATHOS_ROOT>\\codex-adapter\\hooks\\pretooluse-gate.ps1"'
 
 # --- SessionEnd 근사: 턴 종료(Stop)마다 증분 저장 ---
-# SessionEnd는 Codex v0.144.5에 존재하지 않음(확정) — Stop이 유일한 근사 지점.
+# SessionEnd는 Codex v0.144.5에 존재하지 않음(확정 — 이벤트 10종 전수 확인).
+# v0.145.0+ 재확인은 미실측(⚠️ — probe.sh "이벤트 목록 스냅샷" 항목으로 감시
+# 예정) — 사라진 이벤트가 되돌아올 근거는 없으나 단정하지 않는다. Stop이
+# 현재로선 유일한 근사 지점.
 [[hooks.Stop]]
 matcher = ".*"
 command = '/bin/bash "<BATHOS_ROOT>/codex-adapter/hooks/stop-save.sh"'

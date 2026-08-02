@@ -57,6 +57,7 @@ BATHOS turns a **single Claude Code session into a disciplined product team** �
 | **Custom module authoring** | [`docs/MODULE-GUIDE-en.md`](docs/MODULE-GUIDE-en.md) | [`docs/MODULE-GUIDE-kr.md`](docs/MODULE-GUIDE-kr.md) | [`docs/MODULE-GUIDE-es.md`](docs/MODULE-GUIDE-es.md) | Write your own plugin (module.yaml, trigger DSL, W4) without touching the core |
 | **Role customization** | [`docs/ROLE-GUIDE-en.md`](docs/ROLE-GUIDE-en.md) | [`docs/ROLE-GUIDE-kr.md`](docs/ROLE-GUIDE-kr.md) | [`docs/ROLE-GUIDE-es.md`](docs/ROLE-GUIDE-es.md) | Adapt the 17 roles via the 3-layer override (base → team → user) |
 | **Architecture** (contributors) | [`docs/ARCHITECTURE-en.md`](docs/ARCHITECTURE-en.md) | [`docs/ARCHITECTURE-kr.md`](docs/ARCHITECTURE-kr.md) | [`docs/ARCHITECTURE-es.md`](docs/ARCHITECTURE-es.md) | Crate map, invariants (A9, gate, audit), exit/error codes, contributing |
+| **Codex CLI portability** | *(planned)* | [`docs/codex-adapter-kr.md`](docs/codex-adapter-kr.md) · [`docs/PORTABILITY-kr.md`](docs/PORTABILITY-kr.md) | *(planned)* | Codex skills, hooks, subagents, plugin bundle, runtime detection, and known live-verification gaps |
 | **FAQ** | [`docs/FAQ-en.md`](docs/FAQ-en.md) | [`docs/FAQ-kr.md`](docs/FAQ-kr.md) | [`docs/FAQ-es.md`](docs/FAQ-es.md) | Common questions & troubleshooting |
 | **Operating rules / principles** | [`CLAUDE.md`](CLAUDE.md) · [`ETHOS.md`](ETHOS.md) | | | Team operating rules and the gstack-derived ETHOS |
 
@@ -411,6 +412,11 @@ Team artifacts a run produces live under `.agent-team/` (plan, discovery, archit
 
 - It is a **method package that runs on Claude Code**, not a standalone app, and depends on the **experimental Agent Teams** feature.
 - The engine is verified: **510 Rust tests + 86 hook determinism checks, all green**; `cargo clippy -D warnings` clean; release builds reproducibly.
+- Codex CLI support is in active porting: the repo now emits Codex skills, subagents,
+  project hooks, a plugin bundle, runtime detection, and adapter drift diagnostics. The
+  remaining release-readiness gap is authenticated live verification (`story-20`),
+  including hook wiring, skill invocation, plugin activation, and current `SessionEnd`
+  behavior.
 - It is **not yet production-hardened**; APIs, schemas, and command names may change before 1.0.
 - Some wave commands are **orchestration prompts** the lead runs in Claude Code (they spawn/review teammates), not fully autonomous engine flows.
 

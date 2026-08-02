@@ -1,0 +1,22 @@
+{
+  "_comment": "hand-authored SKILL.md 제외 목록 — check-codex-drift.sh가 재생성 대상에서 뺀다. 이 파일은 그 15개의 정본이 to-codex.sh가 아니라 각 SKILL.md 자체임을 기록한다(ADR-CX-03 §결정 2항). 형식: 배열 요소만 이름(kebab, .agents/skills/<name>/ 디렉터리명과 동일) — jq 없이 awk/grep으로 파싱하므로(project-context-kr.md#1) 한 줄에 하나씩 유지할 것.",
+  "_naming_note": "story-05/story-10은 이 파일명을 'scripts/drift-exclusions.json'으로 지정했으나, 그 이름은 이미 docs i18n drift-guard(scripts/check-rule-copies.sh, dist/tests/test-check-rule-copies.sh 소유·소비 — 스키마도 다름: {exclusions:[{path,reason}]})가 선점하고 있어 충돌한다. 기존 파일을 건드리지 않기 위해 이 스크립트만의 새 파일명을 쓴다(andrew-command-classification.md#8 근거 기록, 리드 보고 완료).",
+  "hand_authored_skills": [
+    "autoplan",
+    "cso",
+    "investigate",
+    "lecture",
+    "plan-design-review",
+    "plan-devex-review",
+    "plan-eng-review",
+    "review",
+    "wave0-analysis",
+    "wave1-discovery",
+    "wave2-design",
+    "wave3-story-gate",
+    "wave4-ip-research",
+    "wave5-implement",
+    "wave6-verify-report"
+  ],
+  "note": "story-04(SS5) 팀 스폰형 15개 명단과 정합 — 재실측: grep -lE '\\bTask\\b' .claude/commands/*.md | wc -l = 15. 등재 근거: story-10(SS8) AC#4."
+}
