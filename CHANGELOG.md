@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **웨이브별 멀티 프로바이더 모델 선택 — Kimi·DeepSeek·Qwen 추가 + `waves.<W?>` 정책 배선**
+  (User 결정, 2026-09-09). 기존 per-role 선택 위에 **웨이브 단위** 선택을 얹었다.
+  - **신규 런타임 3개**: `kimi`(`https://api.moonshot.ai/anthropic`) ·
+    `deepseek`(`https://api.deepseek.com/anthropic`) · `qwen`(Model Studio Anthropic 호환).
+    **`gpt` 런타임은 만들지 않았다** — OpenAI는 1차 Anthropic 호환 엔드포인트를 제공하지 않고,
+    기존 `codex` 서브프로세스 경로가 이미 GPT를 커버한다(사다리 2단: 이미 있는 것 재사용).
+  - **`Runtime::is_env_global()`** 이 혼합 규칙의 **단일 진실 원천** — 런타임을 추가할 때 한 곳만
+    고치면 된다. 옛 GLM 전용 R1~R4를 이 술어 기반으로 일반화하고, 3개가 늘면서 **처음 가능해진**
+    "서로 다른 env-global 런타임이 한 배치에 동시 요청" 케이스를 새 Rule 1로 추가했다.
+  - **`waves.<W?>`에 `runtime`/`model`/`reasoning_effort` 필드 신설.** 스키마에 `waves` 맵은
+    이미 있었고 `mixed_policy` 하나만 담고 있었다 — 새 SSOT를 만들지 않고 그 빈 그릇을 채웠다.
+    해석 체인은 5단계로: **역할 → 웨이브 → defaults → frontmatter → 런타임 기본**(`Source::Wave` 추가).
+  - **세션-백엔드 전환 게이트**: 웨이브가 요구하는 env-global 런타임과 현재 `session_backend`가
+    다르면 `validate`가 exit 2로 차단하고 **런타임별 실제 엔드포인트를 명명한** 전환 절차를 제시한다
+    (옛 R3 메뉴의 "GLM"/`glm-env.sh` 하드코딩 제거).
+  - **`wave_roles.rs` 신설** — wave↔role 로스터를 `bathos-cli` private 함수에서 `bathos-state`로
+    이관(중복 정의 제거). W3·W6 겸직 역할(Thomas·Matthias·Timothy)은 양쪽에 그대로 전사하고,
+    역방향 `role_wave()`는 "가장 이른 웨이브"를 반환하되 **그것이 주 웨이브가 아님을 주석에 명시**한다
+    — 근거 없는 두 번째 우선순위 테이블을 만드는 대신 한계를 솔직히 적는 쪽을 택했다.
+  - **CLI**: `bathos model set/unset/show/validate`에 `--wave` 지원(새 서브커맨드 없음).
+  - **`/model-config` 커맨드 신설** + 웨이브 커맨드 7종의 프로바이더 풀 문구 갱신.
+  - **`assets/model-catalog.json` 신설** — 6 프로바이더·30 모델 항목. **allowlist가 아니라 선택
+    UI용 데이터**이므로 카탈로그에 없는 구형·저가 모델 ID도 그대로 동작한다(하위 호환 자동).
+    새 모델 출시 시 이 JSON만 고치면 되고 엔진 재빌드가 불필요하다. 항목별 `verified` 플래그로
+    1차 출처 확인 여부를 표기하고, 폐지된 ID는 `retired`로 분리했다.
+  - **하위 호환**: `waves` 필드가 없거나 `mixed_policy`만 있는 기존 `model-plan.json`이 그대로
+    로드됨을 명명된 회귀 테스트 3개로 증명. 기존 GLM R1~R4 테스트는 문구 무수정 재사용.
+  - **미검증 정직 표기**: Kimi/DeepSeek/Qwen 라이브 API 연결은 실증하지 않았다(키 부재).
+    Qwen 엔드포인트는 `dashscope[-intl].aliyuncs.com`과 `{workspace}.{region}.maas.aliyuncs.com`
+    두 형태가 공식 자료 간 불일치 상태여서 **어느 쪽도 정답으로 확정하지 않고 둘 다 호스트 매칭에
+    반영**했다(한쪽만 매칭하면 실제 Qwen 세션을 조용히 Claude로 오판하는 침묵 실패가 발생).
+
 - **W5 구현 규율(사다리) — 4개 언어** — Wave 5 구현자(Phillip #8 · Andrew #9 · Stephen #10)에게
   주입되는 명시적 구현 규율을 신설했다. 7단 사다리(①존재해야 하는가 →②이미 있는가 →③표준
   라이브러리 →④플랫폼 네이티브 →⑤설치된 의존성 →⑥한 줄 →⑦최소 코드)가 **무엇을 만들지**를
@@ -107,6 +139,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Documentation navigation hub in `README.md`.
 
 ### Changed
+
+- **GLM 기본 모델 `glm-4.7` → `glm-5.3` 갱신** (User 결정, 2026-09-09) — `docs.z.ai` pricing 페이지
+  실확인 기준 현재 플래그십. 실제 하드코딩 기본값은 `scripts/glm-smoke-test.sh` **한 곳**뿐이었고
+  (`glm-env.sh`에는 모델 설정이 없음 — 조사 주장 실측으로 반증), 문서의 라인업 서술을 함께 갱신했다.
+  - `docs/glm-backend-kr.md` · `docs/PORTABILITY-kr.md` — 현재 라인업(`glm-5.3`/`glm-5.3-flash`,
+    이전 세대·경량·무료 티어) 명시. 별칭 매핑 서술은 **2026-07 시점 기준·현재 미재확인**으로 표기
+    (검증하지 않은 매핑을 최신인 척 쓰지 않음).
+  - **측정 기록은 보존** — `glm-backend-kr.md`의 2026-07-16 라이브 실증 항목(`model echo =
+    glm-4.7 → glm-4.7`)은 그 시점의 실측값이므로 수정하지 않고, 기본값이 바뀐 사실과 옛 모델
+    재현법(`GLM_SMOKE_MODEL=glm-4.7`)을 주석으로 덧붙였다.
+  - ⚠️ **`glm-5.3` 라이브 재실증은 미수행** — 기본값만 갱신했음을 문서에 명시(날조 금지).
+  - 하드코딩된 최신 모델 ID는 천장이 있으므로 `ponytail:` 마커로 표기(override = `GLM_SMOKE_MODEL`).
 
 - **`/bathos-debt` 앵커 2종으로 확장** — 마크다운 산출물의 `CONCERNS:`에 더해 소스코드의
   `ponytail: <ceiling>, <upgrade path>` 마커를 함께 수집한다. 매체별 분업(중복 기록 금지)이며,

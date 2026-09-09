@@ -29,7 +29,7 @@
   ANTHROPIC_AUTH_TOKEN=<Z.ai 키>
   ```
 - **보존되는 것:** Agent Teams · 훅(SessionEnd 포함) · 슬래시 커맨드 · MCP · 에이전트 정의 · `bathos` 엔진 = **100%**.
-- **적응 필요 1가지(BATHOS 특이점):** 에이전트 `model` 필드가 `claude-fable-5`/`claude-sonnet-5`(비표준 ID). Z.ai 호환 레이어는 표준 Claude 별칭(opus/sonnet/haiku)을 GLM으로 매핑하므로, **teammate 모델을 별칭으로 두거나 `/config` 기본 모델을 지정**하는 편이 안전. (기본 매핑 예: Opus/Sonnet→GLM-4.7, Haiku→GLM-4.5-Air — 플랜이 자동 최신화되도록 기본 매핑 유지 권장. 최신 코딩 모델 = **GLM-5.2, 1M 컨텍스트**.)
+- **적응 필요 1가지(BATHOS 특이점):** 에이전트 `model` 필드가 `claude-fable-5`/`claude-sonnet-5`(비표준 ID). Z.ai 호환 레이어는 표준 Claude 별칭(opus/sonnet/haiku)을 GLM으로 매핑하므로, **teammate 모델을 별칭으로 두거나 `/config` 기본 모델을 지정**하는 편이 안전. (별칭 매핑 예 — **2026-07 시점 문서 기준, 현재 매핑 미재확인**: Opus/Sonnet→GLM-4.7, Haiku→GLM-4.5-Air — 플랜이 자동 최신화되도록 기본 매핑 유지 권장. **현재 플래그십 = `glm-5.3`**, fast 티어 `glm-5.3-flash`(2026-09-09 `docs.z.ai` pricing 확인). 전체 목록: [`assets/model-catalog.json`](../assets/model-catalog.json).)
 - **한계/주의:** 공식 Anthropic이 아니라 Z.ai 호환 레이어(내부 모델명 재매핑)·자체보고 벤치마크 위주(외부 재현 근거 제한)·티어별 할당량.
 - **실행물:** `docs/glm-backend-kr.md`(설정 가이드) + `scripts/glm-env.sh`(env 헬퍼).
 
@@ -88,5 +88,6 @@
 - GLM×Claude Code(Anthropic 호환): docs.z.ai/scenario-example/develop-tools/claude
 - GLM×Codex 프록시: github.com/openai/codex/issues/9612 · KevinSHH/codex-glm-proxy · MetaFARS/codex-relay
 - GLM-5.2(1M ctx): marktechpost.com(2026-06 GLM-5.2) · GLM-4.6 200K: docs.z.ai/guides/llm/glm-4.6
+- 현재 모델·가격 목록(2026-09-09 확인 — `glm-5.3` 플래그십): docs.z.ai (pricing)
 
 > ⚠️ Codex 훅 기본 활성/Windows 지원, GLM 모델 매핑 세부는 버전에 따라 변함 — 실사용 전 각 출처 재확인.

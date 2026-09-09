@@ -1,0 +1,140 @@
+{
+  "$schema": "bathos:model-catalog@1",
+  "_comment": "BATHOS 모델 카탈로그 — /model-config 와 각 /waveN-… 의 모델 선택 UI가 참조하는 '선택지 목록'이다. 이것은 제약이 아니라 편의다: model-plan.json 의 `model` 필드에는 allowlist 가 없으므로 여기 없는 ID(구형·저가 모델 포함)도 그대로 동작한다. 새 모델이 나오면 이 파일만 고치면 되고 엔진 재빌드가 필요 없다(w2-panes-model-design-kr.md §A1.2 '풀 ID는 버전 유동' 방침 계승).",
+  "_verification_policy": "각 항목의 `verified` 는 '프로바이더 공식 문서에서 직접 확인했는가'를 뜻한다. false = 미확인 — 사용 전 `docs` URL 에서 반드시 재확인할 것. 확인되지 않은 ID를 지어내지 않는다(CLAUDE.md §4 수치 날조 금지). 모델 ID는 빠르게 변하므로 이 파일은 스냅샷이다.",
+  "updated": "2026-09-09",
+
+  "mechanisms": {
+    "native": "Claude Code 기본 백엔드. 역할별 model 지정이 그대로 적용된다.",
+    "env-swap": "ANTHROPIC_BASE_URL + 인증 토큰 환경변수를 바꿔 Claude Code 가 그 프로바이더의 Anthropic 호환 엔드포인트를 보게 한다. 환경변수는 프로세스 전역이므로 한 세션에서 두 env-swap 프로바이더를 동시에 쓸 수 없다(ADR-D-0005, w2-panes-model-design-kr.md 실측 F2). 웨이브별 지정은 '선언 + 전환 게이트'로만 의미를 갖는다.",
+    "subprocess": "역할을 별도 CLI 프로세스로 위임한다. env 충돌이 없어 같은 배치에서 claude 와 공존 가능하다(ADR-D-0006)."
+  },
+
+  "providers": {
+    "claude": {
+      "label": "Anthropic Claude",
+      "runtime": "claude",
+      "mechanism": "native",
+      "docs": "https://docs.claude.com/en/docs/claude-code",
+      "notes": "BATHOS 기본 런타임. 역할 base frontmatter 의 `model` 값이 그대로 쓰인다.",
+      "models": [
+        { "id": "claude-fable-5",  "tier": "flagship", "verified": true, "source": "저장소 내 사실 — .claude/agents/_base/*.md frontmatter" },
+        { "id": "claude-sonnet-5", "tier": "balanced", "verified": true, "source": "저장소 내 사실 — .claude/agents/_base/*.md frontmatter" },
+        { "id": "opus",   "tier": "alias", "verified": true, "source": "저장소 내 사실 — docs/glm-backend-kr.md §2 (별칭은 호환 레이어 매핑에 쓰임)" },
+        { "id": "sonnet", "tier": "alias", "verified": true, "source": "저장소 내 사실 — docs/glm-backend-kr.md §2" },
+        { "id": "haiku",  "tier": "alias", "verified": true, "source": "저장소 내 사실 — docs/glm-backend-kr.md §2" }
+      ]
+    },
+
+    "glm": {
+      "label": "Zhipu / Z.ai GLM",
+      "runtime": "glm",
+      "mechanism": "env-swap",
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "<Z_AI_API_KEY>"
+      },
+      "helper": "source scripts/glm-env.sh  (키는 Z_AI_API_KEY 환경변수로 주입 — 파일에 넣지 말 것)",
+      "docs": "https://docs.z.ai/scenario-example/develop-tools/claude",
+      "notes": "저장소에서 라이브 연결이 실증된 유일한 env-swap 프로바이더(2026-07-16, HTTP 200). 호환 레이어가 Claude 별칭(opus/sonnet/haiku)을 GLM 모델로 매핑하므로, 별칭을 그대로 두면 플랜 최신 모델이 자동 적용된다. ⚠️ 저장소 스크립트(scripts/glm-env.sh, glm-smoke-test.sh)의 기본값이 아직 glm-4.7 로 고정돼 있어 최신 glm-5.3 대비 뒤처진다 — 갱신 여부는 사용자 결정 사항(이 카탈로그는 사실만 기록).",
+      "models": [
+        { "id": "glm-5.3",       "tier": "flagship", "verified": true, "source": "docs.z.ai pricing 페이지" },
+        { "id": "glm-5.3-flash", "tier": "fast",     "verified": true, "source": "docs.z.ai pricing 페이지" },
+        { "id": "glm-5.2",       "tier": "previous", "verified": true, "source": "docs.z.ai pricing 페이지" },
+        { "id": "glm-5.1",       "tier": "previous", "verified": true, "source": "docs.z.ai pricing 페이지" },
+        { "id": "glm-5",         "tier": "previous", "verified": true, "source": "docs.z.ai pricing 페이지" },
+        { "id": "glm-4.7",       "tier": "legacy",   "verified": true, "source": "docs.z.ai pricing 페이지 — 저장소 스크립트의 현재 기본값" },
+        { "id": "glm-4.7-flash", "tier": "free",     "verified": true, "source": "docs.z.ai pricing 페이지 — 무료 티어" },
+        { "id": "glm-4.5-air",   "tier": "light",    "verified": true, "source": "docs.z.ai pricing 페이지" },
+        { "id": "glm-4.5-flash", "tier": "free",     "verified": true, "source": "docs.z.ai pricing 페이지 — 무료 티어" }
+      ]
+    },
+
+    "kimi": {
+      "label": "Moonshot Kimi",
+      "runtime": "kimi",
+      "mechanism": "env-swap",
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.moonshot.ai/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "<MOONSHOT_API_KEY>"
+      },
+      "docs": "https://platform.kimi.ai/docs/models",
+      "notes": "Anthropic 호환 엔드포인트(POST /v1/messages, Bearer auth). 같은 계정/키로 OpenAI SDK(https://api.moonshot.ai/v1)와 Anthropic SDK 양쪽을 쓸 수 있다고 공식 문서가 명시. 이 저장소에서 라이브 연결은 미검증.",
+      "models": [
+        { "id": "kimi-k3",                    "tier": "flagship", "verified": true, "source": "platform.kimi.ai/docs/models — 1M 컨텍스트" },
+        { "id": "kimi-k2.7-code",             "tier": "coding",   "verified": true, "source": "platform.kimi.ai/docs/models" },
+        { "id": "kimi-k2.7-code-highspeed",   "tier": "fast",     "verified": true, "source": "platform.kimi.ai/docs/models" },
+        { "id": "kimi-k2.6",                  "tier": "previous", "verified": true, "source": "platform.kimi.ai/docs/models" }
+      ],
+      "retired": {
+        "note": "아래는 폐지되어 404 를 반환한다 — 쓰지 말 것.",
+        "ids": ["kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "moonshot-v1-auto", "kimi-k2-0905-preview", "kimi-k2-0711-preview", "kimi-k2-turbo-preview", "kimi-k2-thinking", "kimi-k2-thinking-turbo", "kimi-latest", "kimi-thinking-preview"]
+      }
+    },
+
+    "deepseek": {
+      "label": "DeepSeek",
+      "runtime": "deepseek",
+      "mechanism": "env-swap",
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+        "ANTHROPIC_API_KEY": "<DEEPSEEK_API_KEY>"
+      },
+      "docs": "https://api-docs.deepseek.com/guides/anthropic_api/",
+      "notes": "⚠️ 인증 환경변수가 다른 프로바이더와 다르다 — 공식 문서가 ANTHROPIC_AUTH_TOKEN 이 아니라 **ANTHROPIC_API_KEY** 를 쓴다(x-api-key 헤더도 허용). ⚠️ 네이티브 Anthropic API 대비 미지원 항목: top_k, container, mcp_servers, anthropic-beta 헤더, document 타입 콘텐츠, thinking.budget_tokens, cache_control, disable_parallel_tool_use — 무시된다. ⚠️ 인식하지 못한 Claude 모델명을 넘기면 조용히 deepseek-v4-flash 로 폴백한다(오타가 에러 없이 넘어갈 수 있음). 이 저장소에서 라이브 연결은 미검증.",
+      "models": [
+        { "id": "deepseek-v4-pro",              "tier": "flagship",     "verified": true, "source": "api-docs.deepseek.com — 포인트릴리스로 in-place 갱신됨" },
+        { "id": "deepseek-v4-flash",            "tier": "fast",         "verified": true, "source": "api-docs.deepseek.com — 미인식 모델명의 폴백 대상" },
+        { "id": "deepseek-v4-flash-vision-exp", "tier": "experimental", "verified": true, "source": "api-docs.deepseek.com" }
+      ],
+      "retired": {
+        "note": "2026-07-24 폐지 — 현재 404. 예전에는 V4-Flash 의 비사고/사고 모드 별칭이었다.",
+        "ids": ["deepseek-chat", "deepseek-reasoner"]
+      }
+    },
+
+    "qwen": {
+      "label": "Alibaba Qwen (Model Studio / DashScope)",
+      "runtime": "qwen",
+      "mechanism": "env-swap",
+      "env": {
+        "ANTHROPIC_BASE_URL": "https://{WorkspaceId}.{region}.maas.aliyuncs.com/apps/anthropic",
+        "ANTHROPIC_AUTH_TOKEN": "<DASHSCOPE_API_KEY>"
+      },
+      "url_is_templated": true,
+      "regions": ["ap-southeast-1", "cn-beijing", "eu-central-1", "us-east-1", "ap-northeast-1"],
+      "docs": "https://www.alibabacloud.com/help/en/model-studio/anthropic-api-messages",
+      "notes": "⚠️ 다른 세 프로바이더와 달리 **base URL 이 고정 상수가 아니다** — 워크스페이스 ID와 리전이 URL 에 박힌다. 따라서 설정에 workspace_id/region 이 필요하다. ⚠️ base URL 끝에 /v1/ 을 붙이면 /v1/v1/models 로 깨진다(공식 문서 경고). ⚠️ /v1/models 디스커버리 엔드포인트가 없어 모델을 수동 등록해야 한다. ⚠️ temperature 범위가 Anthropic 네이티브([0,1])와 달리 [0,2). 참고: 이 게이트웨이는 동일 인터페이스로 타사 모델(deepseek-v4-*, kimi-k3, glm-5.1 등)도 중계하지만, 경쟁사 모델을 Alibaba 가용성에 묶는 셈이라 BATHOS 기본 경로로는 권장하지 않는다. 이 저장소에서 라이브 연결은 미검증.",
+      "_url_discrepancy": "일부 2차 자료는 https://dashscope-intl.aliyuncs.com/apps/anthropic 형태의 단일 URL 을 제시한다. 공식 문서 2곳은 워크스페이스·리전 템플릿 형태를 보여 준다. 실제 사용 전 자신의 Model Studio 콘솔에서 엔드포인트를 확인할 것 — 이 불일치를 임의로 하나로 정하지 않는다.",
+      "models": [
+        { "id": "qwen3.8-max",  "tier": "flagship", "verified": true,  "source": "alibabacloud.com/help/en/model-studio" },
+        { "id": "qwen3.7-max",  "tier": "previous", "verified": true,  "source": "alibabacloud.com/help/en/model-studio" },
+        { "id": "qwen3.7-plus", "tier": "balanced", "verified": true,  "source": "alibabacloud.com/help/en/model-studio" },
+        { "id": "qwen3.6-plus", "tier": "previous", "verified": true,  "source": "alibabacloud.com/help/en/model-studio" },
+        { "id": "qwen-plus",    "tier": "legacy",   "verified": true,  "source": "alibabacloud.com/help/en/model-studio" },
+        { "id": "qwen-turbo",   "tier": "legacy",   "verified": true,  "source": "alibabacloud.com/help/en/model-studio" },
+        { "id": "qwen-flash",   "tier": "fast",     "verified": true,  "source": "alibabacloud.com/help/en/model-studio" },
+        { "id": "qwen3.6-flash", "tier": "fast", "verified": false, "source": "공식 페이지 2곳이 qwen3.6-flash 와 qwen3.5-flash 로 서로 다르게 표기 — 어느 쪽이 현재인지 미확정. 사용 전 모델 목록·가격 페이지에서 직접 확인할 것" }
+      ]
+    },
+
+    "codex": {
+      "label": "OpenAI Codex CLI (GPT 경로)",
+      "runtime": "codex",
+      "mechanism": "subprocess",
+      "docs": "https://developers.openai.com/codex/cli",
+      "notes": "OpenAI 는 Anthropic 호환 엔드포인트를 제공하지 않으므로(반대 방향으로 Anthropic 이 OpenAI 호환 엔드포인트를 제공하는 것은 무관) GPT 는 env-swap 이 아니라 이 경로로 쓴다. Codex 는 OpenAI 자체 1st-party CLI 라 GLM 때 필요했던 relay 가 필요 없다(relay 는 'Codex 위에서 GLM 을 돌릴 때'만 필요). 별도 프로세스라 같은 배치에서 claude 와 공존 가능. 실행은 codex-adapter/run-role.sh 가 위임하며 reasoning_effort 를 함께 전달한다. 인증은 Codex CLI 자체(ChatGPT 로그인 또는 OPENAI_API_KEY). 측정 기준선: Codex CLI v0.144.5(정적 스키마 실측), PR #27 은 v0.145.0+ 목표 표기.",
+      "models": [
+        { "id": null, "tier": "installed-default", "verified": true, "source": "저장소 방침 — w2-panes-model-design-kr.md §A1.2 'codex 모델 ID 를 날조하지 않는다'. 설치된 Codex CLI 기본값을 쓰거나 사용자가 직접 지정" }
+      ],
+      "_model_id_note": "GPT 계열 ID(gpt-5.x / gpt-6-astra 등)는 버전 변동이 매우 빨라 이 카탈로그에 고정하지 않는다. 필요하면 사용자가 codex 설정에서 직접 지정한다. 저장소 AGENTS.md 에 gpt-5.6-sol 이 언급돼 있으나 이 카탈로그의 검증 대상은 아니다."
+    }
+  },
+
+  "_mixing_rules": {
+    "summary": "한 웨이브 배치 안에서 서로 다른 env-swap 프로바이더는 공존할 수 없고, env-swap 과 claude 도 공존할 수 없다. codex 는 서브프로세스라 무엇과도 공존한다. 위반 시 `bathos model validate --wave <W?>` 가 exit 2 로 차단한다.",
+    "session_transition": "웨이브가 요구하는 env-swap 백엔드와 현재 세션 백엔드가 다르면 세션 재시작이 필요하다: /save-session → 셸에서 env 변경 → Claude Code 재시작 → /cold-start."
+  },
+
+  "_key_handling": "API 키는 저장소 밖 로컬 스토어(~/.bathos/*.env, chmod 600)에 두고 환경변수로 주입한다. 이 파일에도, 어떤 저장소 파일에도 키를 적지 않는다."
+}

@@ -15,7 +15,7 @@ Lv2에서는 선택, Lv4에서는 필수. 현재 Lv 확인: `$1/.agent-team/_sta
 
 1. `./core/target/release/bathos -s $1/.agent-team/_state model detect` 실행(session_backend 기록).
 2. `bathos model show --wave W4`로 역할별 유효 runtime/model 표를 사용자에게 제시하고 묻는다:
-   "이번 웨이브 역할별 모델입니다. 변경할 역할이 있습니까? (풀: fable5·sonnet5·haiku / GLM / Codex — 기본값 유지 가능)"
+   "이번 웨이브 역할별 모델입니다. 변경할 역할이 있습니까? (풀: Claude fable5·sonnet5·haiku / env 스왑: GLM·Kimi·DeepSeek·Qwen / Codex: GPT 경로 — 기본값 유지 가능. 웨이브 단위 지정·전환 절차는 `/model-config`)"
 3. 변경분만 `bathos model set <slug> --runtime <r> [--model <m>]`으로 기록.
 4. `bathos model validate --wave W4` — exit 2면 스폰 금지: 출력된 해소 선택지를
    사용자에게 제시하고 재결정 받는다(자동 우회 금지).
