@@ -27,6 +27,10 @@ Paul(0·리드/CEO렌즈) · John(1·리버스) · Caleb(2·시장분석 +W0 Ana
 
 > **명령어 정합 메모:** 기존 스킬 파일명(`/wave3-ip-research`,`/wave4-implement`,`/wave5-verify-report`)은 구 5웨이브 번호 유지 — 위 표대로 W4/W5/W6에 매핑됩니다. 차기 정리에서 신규 번호로 리네임 예정.
 
+## W5 구현 규율 — 사다리(Ladder)
+W5 구현자(Phillip·Andrew·Stephen)는 스폰 시 **구현 규율**을 함께 주입받는다. 7단 사다리(①존재해야 하는가 →②이미 있는가 →③표준 라이브러리 →④플랫폼 네이티브 →⑤설치된 의존성 →⑥한 줄 →⑦최소 코드)가 **무엇을 만들지**를, ETHOS *Boil the Ocean*이 **정한 범위의 완전성**을 지배한다 — 검증·에러 처리·보안·접근성·테스트는 사다리로 자르지 않는다. 천장 있는 단순화는 `ponytail: <ceiling>, <upgrade path>`(영어) 마커를 남기고 `/bathos-debt`가 문서의 `CONCERNS:`와 함께 수집한다. 강도: `/bathos intensity <lite|full|ultra|off>`(기본 `full`).
+정본 `.claude/agents/_preamble/ponytail-inject-kr.md` (보조 번역 `-en`·`-ja`·`-es`) · 출처 고지 `CREDITS.md`.
+
 ## 게이트 용어 (통일)
 **PASS**(즉시 진입) / **CONCERNS**(리스크 로그 후 진행) / **FAIL**(차단·재게이트). 게이트는 FACILITATOR — 근거 없는 자동 PASS 금지. 핵심 게이트(W3)는 훅으로 하드 강제.
 

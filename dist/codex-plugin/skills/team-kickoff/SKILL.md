@@ -49,7 +49,7 @@ manifest는 **손으로 작성하지 마세요.** LLM 수기 작성은 런타임
 #   기존 manifest가 있으면 --force 없이는 [E-STATE-EXISTS]로 거부(비파괴적).
 ```
 
-성공 출력(`[bathos state init] ✓ manifest.json 생성: … (project_id=bathos-…, level=0)`)을 확인하세요. seed에는 project_id(`bathos-<uuid>`)·created(RFC3339)·status·current_level=0(잠정)·waves_status(전체 pending)·빈 gates/routing이 스키마대로 채워집니다. 엔진 미발견 시에만 예외적으로 리드가 스키마를 준수해 수기 작성하되, 즉시 `bathos state validate`로 검증합니다.
+성공 출력(`[bathos state init] ✓ manifest.json 생성: … (project_id=bathos-…, level=0)`)을 확인하세요. seed에는 project_id(`bathos-<uuid>`)·codename·created(RFC3339)·status·lang·current_level=0(잠정)과 빈 waves/gates/routing 배열이 스키마대로 채워집니다. 엔진 미발견 시에만 예외적으로 리드가 스키마를 준수해 수기 작성하되, 즉시 `bathos state validate`로 검증합니다.
 
 **5) wave-log.md 초기화** → `$1/.agent-team/_state/wave-log.md`
 "킥오프 완료 — BATHOS 7웨이브 파이프라인 초기화. 다음: /route 로 Scale-Adaptive 레벨 확정."

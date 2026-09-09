@@ -226,6 +226,20 @@ Mainline dependency: **W0 → W1 → W2 → W3 → W5 → W6**. W4 (IP & researc
 
 **Why W3 is the heart.** Wave 3 closes the design→build context gap: role #17 **Matthew** condenses the upstream work into a **self-contained dev story file** (9 sections, every technical claim tagged `[Source: …]`), Thomas & Matthias review it independently, and if the verdict is `FAIL` the `gate-enforce` hook **physically blocks** entry into W5.
 
+**How W5 builds — the implementation discipline.** Wave 5 runs under an explicit **ladder** that decides *what* gets built. Before writing code, the implementer stops at the first rung that holds: ① does this need to exist at all → ② is it already in this codebase → ③ does the standard library do it → ④ does a native platform feature cover it → ⑤ does an already-installed dependency solve it → ⑥ can it be one line → ⑦ only then, the minimum code that works.
+
+The ladder governs **scope**; ETHOS *Boil the Ocean* governs **completeness** of the scope you settled on. The two axes never cut each other — input validation, error handling, security, accessibility and the one runnable check behind non-trivial logic are explicitly out of the ladder's reach.
+
+A simplification that cuts a real corner carries a marker naming its ceiling and its way out:
+
+```rust
+// ponytail: single global lock, split into per-wave locks if profiling shows contention
+```
+
+`/bathos-debt` harvests those `ponytail:` markers from source alongside `CONCERNS:` anchors in documents, and flags any marker with no upgrade trigger as `no-trigger` — so "later" cannot quietly become "never". Strength is a per-session toggle: `/bathos intensity <lite|full|ultra|off>` (default `full`).
+
+Rules: [`.claude/agents/_preamble/ponytail-inject-kr.md`](.claude/agents/_preamble/ponytail-inject-kr.md) — canonical (KR), with `-en` / `-ja` / `-es` editions alongside.
+
 ---
 
 ## Scale-adaptive routing (Lv0–4)
@@ -479,6 +493,8 @@ THE SOFTWARE.
 We name this lineage by choice, not obligation. A system whose central tenet is that *generation must remain answerable to verification* would contradict itself by obscuring the prior art it stands on. BATHOS therefore records its debt to BMAD-METHOD plainly and with genuine respect — it charted the terrain that BATHOS set out to deepen. In accordance with the MIT License, BMAD-METHOD’s copyright and license notice are preserved in [`LICENSE`](LICENSE); the full acknowledgment lives in [`CREDITS.md`](CREDITS.md).
 
 BATHOS is a separate, independently implemented project and does **not** use the trademarks “BMAD”, “BMad Method”, “BMad Builder”, “BMB”, “TEA”, “CIS”, “GDS”, or “WDS” in its product name or marketing.
+
+**Implementation discipline (Wave 5).** The W5 ladder adapts engineering principles from **[ponytail](https://github.com/DietrichGebert/ponytail)** (MIT) — the YAGNI-first rung ladder, the “when not to be lazy” boundaries, and the deferred-simplification marker convention. BATHOS absorbs the *principles only*: the persona, tone, and branding are deliberately not adopted, and the rules were rewritten for the wave/role context with an explicit precedence rule against ETHOS *Boil the Ocean*. Our reverse analysis and the scope decision are recorded in [`_recon/ponytail-analysis.md`](_recon/ponytail-analysis.md).
 
 ---
 
