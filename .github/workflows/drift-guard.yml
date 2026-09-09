@@ -58,7 +58,10 @@ jobs:
       - name: test-uninstall.sh (CF-B4 §5, 4 픽스처)
         run: bash dist/tests/test-uninstall.sh
 
-      - name: test-check-rule-copies.sh (CF-B3 §5, 4 픽스처: byte/invariant/제외)
+      # 이 값은 반드시 인용한다 — 인용 없는 YAML 스칼라에 ": "(콜론+공백)이 들어가면
+      # "mapping values are not allowed here"로 파싱이 실패하고, 워크플로가 job을
+      # 하나도 만들지 못한 채 0초에 죽는다(로그도 남지 않아 원인 추적이 어렵다). #32
+      - name: "test-check-rule-copies.sh (CF-B3 §5, 4 픽스처: byte/invariant/제외)"
         run: bash dist/tests/test-check-rule-copies.sh
 
   mcp-reference-tests:
