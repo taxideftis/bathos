@@ -27,7 +27,8 @@ BATHOS 에이전트 정의(`.claude/agents/_base/*.md`)의 `model` 필드는 **`
 
 - **(권장·무변경) `/config`의 Default teammate model** 을 지정 → 팀원 스폰 시 그 모델 사용. 저장소 파일 수정 불필요.
 - **(대안) 별칭으로 매핑** — teammate 모델을 `opus`/`sonnet`/`haiku` 별칭으로 두면 Z.ai가 GLM으로 매핑.
-- Z.ai 기본 매핑 예시(문서 기준, 변동 가능): **Opus/Sonnet → GLM-4.7**, **Haiku → GLM-4.5-Air**. 최신 코딩 모델은 **GLM-5.2(1M 컨텍스트)**. → 기본 매핑을 유지하면 플랜이 최신 모델로 자동 갱신됨.
+- Z.ai 별칭 매핑 예시(**2026-07 시점 문서 기준 — 현재 매핑은 재확인하지 않았음**): **Opus/Sonnet → GLM-4.7**, **Haiku → GLM-4.5-Air**. → 기본 매핑을 유지하면 플랜이 최신 모델로 자동 갱신된다.
+- **현재 모델 라인업(2026-09-09 `docs.z.ai` pricing 페이지 확인):** 플래그십 **`glm-5.3`**, fast 티어 `glm-5.3-flash`. 이전 세대 `glm-5.2`·`glm-5.1`·`glm-5`·`glm-4.7`, 경량 `glm-4.5-air`, 무료 티어 `glm-4.7-flash`·`glm-4.5-flash`. 전체 목록·검증 상태는 [`assets/model-catalog.json`](../assets/model-catalog.json).
 
 > 원칙: 저장소의 정본 `model` 필드(`claude-*`)는 **Claude 실행용 기본값으로 보존**하고, GLM 구동은 **환경변수 + `/config`** 로만 전환하는 것을 권장(코드 무변경·가역).
 
@@ -103,8 +104,13 @@ Codex(`runtime=codex`)는 **별도 프로세스**라 이 제약에서 예외다 
   - 응답 텍스트 = 지시 토큰 `BATHOS-GLM-OK` 정확 반환(참고용).
   - 즉 이 문서의 "환경변수 2개면 GLM으로 구동" 주장이 **실서버·유효키로 봉인됨**. (키는 문서·저장소에 기록하지 않음.)
   - 남은 선택 검증: `--tool-use`(툴콜 라이브)·장기 에이전트 워크플로우 품질은 실사용에서 계측 권장.
+  - ℹ️ **위 `glm-4.7`은 그 시점의 측정값이므로 고치지 않는다**(측정 기록 보존). 이후 2026-09-09에
+    `glm-smoke-test.sh`의 **기본 모델을 `glm-5.3`으로 갱신**했으므로, 지금 재실행하면 echo 값은
+    `glm-5.3 → glm-5.3`이 된다. 옛 모델로 재현하려면 `GLM_SMOKE_MODEL=glm-4.7` 또는 `--model glm-4.7`.
+    ⚠️ `glm-5.3`에 대한 라이브 재실증은 **아직 수행하지 않았다**(기본값만 갱신 — 날조 금지).
 
 ## 출처
 - Z.ai × Claude Code 공식 가이드: https://docs.z.ai/scenario-example/develop-tools/claude
 - GLM Coding Plan × Claude Code: https://codingplan.run/guides/claude-code-with-glm
 - GLM-5.2(1M ctx): https://www.marktechpost.com/2026/06/14/z-ai-launches-glm-5-2-... · GLM-4.6(200K): https://docs.z.ai/guides/llm/glm-4.6
+- 현재 모델·가격 목록(2026-09-09 확인 — `glm-5.3` 플래그십): https://docs.z.ai (pricing)

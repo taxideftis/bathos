@@ -42,7 +42,7 @@ usage() {
 옵션:
   --dry-run           요청을 구성만 하고 전송하지 않는다(키 불요). 구성 결과 출력 후 exit 0.
   --tool-use          텍스트 검증에 더해 tool-use 호출 검증을 추가 수행(선택 2차 요청).
-  --model <id>        요청 model 필드 (기본: 환경 GLM_SMOKE_MODEL > "glm-4.7")
+  --model <id>        요청 model 필드 (기본: 환경 GLM_SMOKE_MODEL > "glm-5.3")
   --base-url <url>    엔드포인트 (기본: 환경 ANTHROPIC_BASE_URL > "https://api.z.ai/api/anthropic")
   --timeout <sec>     curl --max-time (기본: 60)
   --verbose           요청/응답 원문(키 마스킹) 출력
@@ -85,7 +85,9 @@ fi
 # 2. 설정 해석 (옵션 > 환경 > 기본값)
 # --------------------------------------------------------------------------
 BASE_URL="${OPT_BASE_URL:-${ANTHROPIC_BASE_URL:-https://api.z.ai/api/anthropic}}"
-MODEL="${OPT_MODEL:-${GLM_SMOKE_MODEL:-glm-4.7}}"
+# ponytail: hardcoded latest model id goes stale each time Z.ai ships a new one, override with
+# GLM_SMOKE_MODEL or --model; revisit when a docs.z.ai check shows a newer flagship than glm-5.3
+MODEL="${OPT_MODEL:-${GLM_SMOKE_MODEL:-glm-5.3}}"
 TIMEOUT="${OPT_TIMEOUT:-60}"
 # 정규화: trailing slash 제거 후 /v1/messages를 붙인다(E-A1 — "//v1/messages" 방지).
 URL="${BASE_URL%/}/v1/messages"

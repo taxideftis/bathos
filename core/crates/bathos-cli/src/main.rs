@@ -44,7 +44,7 @@ use bathos_state::{
     runtime_host,
     schema::validate_manifest,
     store::StateStore,
-    Verdict,
+    wave_roles, Verdict,
 };
 use bathos_story_engine::StoryEngine;
 use clap::{Parser, Subcommand};
@@ -384,10 +384,15 @@ enum ModelAction {
         #[arg(long)]
         json: bool,
     },
-    /// 역할의 runtime/model을 plan에 기록한다 (변경분만 — 리드 세션 전용 단일 쓰기 경로).
+    /// 역할 또는 웨이브의 runtime/model을 plan에 기록한다 (변경분만 — 리드 세션 전용 단일
+    /// 쓰기 경로). `slug`와 `--wave`는 서로 배타적 — 정확히 하나만 지정한다(§4-7).
     Set {
-        /// agent 정의 slug (예: phillip-backend-engineer)
-        slug: String,
+        /// agent 정의 slug (예: phillip-backend-engineer). `--wave`와 동시 지정 불가.
+        slug: Option<String>,
+        /// 슬러그 대신 이 웨이브 자체에 정책을 기록한다(예: W5) — `waves.<W?>.runtime` 등.
+        /// `slug`와 동시 지정 불가.
+        #[arg(long)]
+        wave: Option<String>,
         #[arg(long)]
         runtime: String,
         #[arg(long)]
@@ -395,12 +400,19 @@ enum ModelAction {
         #[arg(long = "reasoning-effort")]
         reasoning_effort: Option<String>,
     },
-    /// plan에서 역할 항목을 제거한다 (→ frontmatter 폴백으로 복귀).
-    Unset { slug: String },
+    /// plan에서 역할 또는 웨이브 항목을 제거한다(역할 → frontmatter 폴백 복귀 /
+    /// 웨이브 → 그 웨이브의 runtime/model 오버라이드만 제거, `mixed_policy`는 보존).
+    Unset {
+        /// `--wave`와 동시 지정 불가.
+        slug: Option<String>,
+        #[arg(long)]
+        wave: Option<String>,
+    },
     /// 현재 세션의 실제 백엔드(session_backend)를 판별해 plan에 기록한다
-    /// (env `ANTHROPIC_BASE_URL`에 `api.z.ai` 포함 → glm, 그 외 → claude).
+    /// (env `ANTHROPIC_BASE_URL` 호스트로 claude|glm|kimi|deepseek|qwen 판별).
     Detect,
-    /// GLM/Codex 혼합 배치 규칙(R1~R4)을 검증한다. PASS=exit 0 / 위반=exit 2 + 해소 선택지.
+    /// env-global 런타임(glm/kimi/deepseek/qwen) 혼합 배치 규칙 + 세션-백엔드 전환 게이트를
+    /// 검증한다(§4-6). PASS=exit 0 / 위반=exit 2 + 해소 선택지.
     Validate {
         /// 검증 대상 웨이브 (예: W5). 미지정 시 plan에 등재된 모든 역할을 대상으로 검증.
         #[arg(long)]
@@ -414,42 +426,9 @@ enum ModelAction {
     },
 }
 
-/// `waves.<W?>` 역할군(role↔wave 배정). BATHOS의 정본은 프로젝트 `CLAUDE.md` §1/§2의
-/// 역할·모델 표다 — 여기서는 그 표를 `bathos model show/validate --wave`가 참조할 수
-/// 있는 정적 상수로 옮겨 적었을 뿐, 새로운 정책을 만들어내지 않는다(날조 금지).
-/// W3/W6의 겸직 보조 역할(Timothy)·독립 리뷰어(Thomas/Matthias)도 CLAUDE.md 표기 그대로 포함.
-fn wave_role_slugs(wave_id: &str) -> Option<&'static [&'static str]> {
-    match wave_id.to_ascii_uppercase().as_str() {
-        "W0" => Some(&["caleb-market-analyst", "john-reverse-specialist"]),
-        "W1" => Some(&["john-reverse-specialist", "caleb-market-analyst"]),
-        "W2" => Some(&[
-            "joshua-service-planner",
-            "james-architect",
-            "jonnathan-chief-designer",
-        ]),
-        "W3" => Some(&[
-            "matthew-story-engineer",
-            "thomas-code-reviewer",
-            "matthias-qa-validator",
-            "timothy-doc-specialist",
-        ]),
-        "W4" => Some(&["mark-ip-specialist", "nathanael-research-writer"]),
-        "W5" => Some(&[
-            "phillip-backend-engineer",
-            "andrew-frontend-engineer",
-            "stephen-ml-engineer",
-        ]),
-        "W6" => Some(&[
-            "thomas-code-reviewer",
-            "timothy-doc-specialist",
-            "matthias-qa-validator",
-            "michael-security-specialist",
-            "hananiah-refactoring-specialist",
-            "martin-monitoring-reporter",
-        ]),
-        _ => None,
-    }
-}
+// `waves.<W?>` 역할군(role↔wave 배정) — moved to `bathos_state::wave_roles` (§4-4 of the W5 task
+// brief) so `model_plan`'s wave-aware resolve/validate and this CLI share one definition instead
+// of two. Use `wave_roles::wave_role_slugs`/`wave_roles::role_wave` directly; nothing left here.
 
 // ── audit subcommands (B-1 fix) ──────────────────────────────────────────────
 
@@ -1209,7 +1188,12 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
                 .iter()
                 .map(|slug| {
                     let fm = model_plan::find_frontmatter_model(&agents_dir, slug);
-                    let eff = model_plan::resolve_effective(&plan, slug, fm.as_deref());
+                    // With no explicit `--wave`, fall back to this role's own wave (best-effort
+                    // — see `wave_roles::role_wave`'s doc comment on the W3/W6 multi-wave
+                    // caveat) so `show` still reflects a wave-level override even when the
+                    // caller didn't name one.
+                    let wave_ctx = wave.as_deref().or_else(|| wave_roles::role_wave(slug));
+                    let eff = model_plan::resolve_effective(&plan, slug, fm.as_deref(), wave_ctx);
                     serde_json::json!({
                         "slug": slug,
                         "runtime": eff.runtime.as_str(),
@@ -1230,6 +1214,23 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
                         .map(|w| format!(" wave={w}"))
                         .unwrap_or_default()
                 );
+                // If the requested wave itself carries a policy, surface it once up front —
+                // the per-role rows below already reflect it via `source=wave`, but seeing the
+                // raw policy line makes "why do these roles all say wave" legible at a glance.
+                if let Some(w) = wave.as_deref() {
+                    if let Some(policy) = plan.waves.get(w) {
+                        println!(
+                            "wave policy[{w}]: runtime={} model={} reasoning_effort={} mixed_policy={:?}",
+                            policy
+                                .runtime
+                                .map(|r| r.as_str().to_string())
+                                .unwrap_or_else(|| "-".into()),
+                            policy.model.as_deref().unwrap_or("-"),
+                            policy.reasoning_effort.as_deref().unwrap_or("-"),
+                            policy.mixed_policy
+                        );
+                    }
+                }
                 println!("{:<32} {:<8} {:<20} source", "role", "runtime", "model");
                 for row in &rows {
                     println!(
@@ -1247,6 +1248,7 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
         // ── bathos model set ─────────────────────────────────────────────────
         ModelAction::Set {
             slug,
+            wave,
             runtime,
             model,
             reasoning_effort,
@@ -1264,53 +1266,145 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
             }
 
             let (mut plan, _warnings) = model_plan::load(state_dir);
-            plan.roles.insert(
-                slug.clone(),
-                bathos_state::model_plan::RoleModelSpec {
-                    runtime: parsed_runtime,
-                    model: model.clone(),
-                    reasoning_effort: reasoning_effort.clone(),
-                },
-            );
-            plan.updated = chrono::Utc::now();
-            plan.updated_by = "Paul".to_string();
-            model_plan::save(state_dir, &plan).context("model-plan.json 저장 실패")?;
 
-            // best-effort audit trail (never blocks — same fail-safe posture as `audit append`)
-            let _ = bathos_state::audit::append_audit_entry(
-                &state_dir.join("audit-log.jsonl"),
-                &read_project_id_from_state(state_dir),
-                "Paul",
-                "model.set",
-                &format!("{slug}→{runtime}"),
-            );
+            match (slug, wave) {
+                (Some(_), Some(_)) => {
+                    anyhow::bail!(
+                        "[E-MODEL-TARGET-AMBIGUOUS] slug와 --wave는 동시에 지정할 수 없습니다 \
+                         (역할 단위 vs 웨이브 단위 중 하나만 선택)"
+                    )
+                }
+                (None, None) => {
+                    anyhow::bail!(
+                        "[E-MODEL-TARGET-MISSING] slug 또는 --wave 중 하나를 지정하십시오"
+                    )
+                }
+                (Some(slug), None) => {
+                    plan.roles.insert(
+                        slug.clone(),
+                        bathos_state::model_plan::RoleModelSpec {
+                            runtime: parsed_runtime,
+                            model: model.clone(),
+                            reasoning_effort: reasoning_effort.clone(),
+                        },
+                    );
+                    plan.updated = chrono::Utc::now();
+                    plan.updated_by = "Paul".to_string();
+                    model_plan::save(state_dir, &plan).context("model-plan.json 저장 실패")?;
 
-            eprintln!(
-                "[bathos model set] ✓ {slug} → runtime={runtime}{}{}",
-                model.map(|m| format!(" model={m}")).unwrap_or_default(),
-                reasoning_effort
-                    .map(|r| format!(" reasoning_effort={r}"))
-                    .unwrap_or_default()
-            );
+                    // best-effort audit trail (never blocks — same fail-safe posture as
+                    // `audit append`)
+                    let _ = bathos_state::audit::append_audit_entry(
+                        &state_dir.join("audit-log.jsonl"),
+                        &read_project_id_from_state(state_dir),
+                        "Paul",
+                        "model.set",
+                        &format!("{slug}→{runtime}"),
+                    );
+
+                    eprintln!(
+                        "[bathos model set] ✓ {slug} → runtime={runtime}{}{}",
+                        model.map(|m| format!(" model={m}")).unwrap_or_default(),
+                        reasoning_effort
+                            .map(|r| format!(" reasoning_effort={r}"))
+                            .unwrap_or_default()
+                    );
+                }
+                (None, Some(wave)) => {
+                    let entry = plan.waves.entry(wave.clone()).or_default();
+                    entry.runtime = Some(parsed_runtime);
+                    entry.model = model.clone();
+                    entry.reasoning_effort = reasoning_effort.clone();
+                    plan.updated = chrono::Utc::now();
+                    plan.updated_by = "Paul".to_string();
+                    model_plan::save(state_dir, &plan).context("model-plan.json 저장 실패")?;
+
+                    let _ = bathos_state::audit::append_audit_entry(
+                        &state_dir.join("audit-log.jsonl"),
+                        &read_project_id_from_state(state_dir),
+                        "Paul",
+                        "model.set",
+                        &format!("wave:{wave}→{runtime}"),
+                    );
+
+                    eprintln!(
+                        "[bathos model set] ✓ wave={wave} → runtime={runtime}{}{}",
+                        model.map(|m| format!(" model={m}")).unwrap_or_default(),
+                        reasoning_effort
+                            .map(|r| format!(" reasoning_effort={r}"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
             Ok(0)
         }
 
         // ── bathos model unset ───────────────────────────────────────────────
-        ModelAction::Unset { slug } => {
+        ModelAction::Unset { slug, wave } => {
             let (mut plan, _warnings) = model_plan::load(state_dir);
-            let existed = plan.roles.remove(&slug).is_some();
-            model_plan::save(state_dir, &plan).context("model-plan.json 저장 실패")?;
-            let _ = bathos_state::audit::append_audit_entry(
-                &state_dir.join("audit-log.jsonl"),
-                &read_project_id_from_state(state_dir),
-                "Paul",
-                "model.unset",
-                &slug,
-            );
-            if existed {
-                eprintln!("[bathos model unset] ✓ {slug} 제거 → frontmatter 폴백으로 복귀");
-            } else {
-                eprintln!("[bathos model unset] {slug}은 plan에 등재돼 있지 않았음(변화 없음)");
+
+            match (slug, wave) {
+                (Some(_), Some(_)) => {
+                    anyhow::bail!(
+                        "[E-MODEL-TARGET-AMBIGUOUS] slug와 --wave는 동시에 지정할 수 없습니다"
+                    )
+                }
+                (None, None) => {
+                    anyhow::bail!(
+                        "[E-MODEL-TARGET-MISSING] slug 또는 --wave 중 하나를 지정하십시오"
+                    )
+                }
+                (Some(slug), None) => {
+                    let existed = plan.roles.remove(&slug).is_some();
+                    model_plan::save(state_dir, &plan).context("model-plan.json 저장 실패")?;
+                    let _ = bathos_state::audit::append_audit_entry(
+                        &state_dir.join("audit-log.jsonl"),
+                        &read_project_id_from_state(state_dir),
+                        "Paul",
+                        "model.unset",
+                        &slug,
+                    );
+                    if existed {
+                        eprintln!("[bathos model unset] ✓ {slug} 제거 → frontmatter 폴백으로 복귀");
+                    } else {
+                        eprintln!(
+                            "[bathos model unset] {slug}은 plan에 등재돼 있지 않았음(변화 없음)"
+                        );
+                    }
+                }
+                (None, Some(wave)) => {
+                    // Only clears `runtime`/`model`/`reasoning_effort` — `mixed_policy` is a
+                    // separate, older concern (§A1.1) and is left untouched so this can't
+                    // accidentally resurrect a "forbid" default a project relies on.
+                    let existed = if let Some(entry) = plan.waves.get_mut(&wave) {
+                        let had_override = entry.runtime.is_some()
+                            || entry.model.is_some()
+                            || entry.reasoning_effort.is_some();
+                        entry.runtime = None;
+                        entry.model = None;
+                        entry.reasoning_effort = None;
+                        had_override
+                    } else {
+                        false
+                    };
+                    model_plan::save(state_dir, &plan).context("model-plan.json 저장 실패")?;
+                    let _ = bathos_state::audit::append_audit_entry(
+                        &state_dir.join("audit-log.jsonl"),
+                        &read_project_id_from_state(state_dir),
+                        "Paul",
+                        "model.unset",
+                        &format!("wave:{wave}"),
+                    );
+                    if existed {
+                        eprintln!(
+                            "[bathos model unset] ✓ wave={wave} runtime/model 오버라이드 제거"
+                        );
+                    } else {
+                        eprintln!(
+                            "[bathos model unset] wave={wave}에 제거할 runtime/model 오버라이드가 없었음(변화 없음)"
+                        );
+                    }
+                }
             }
             Ok(0)
         }
@@ -1340,7 +1434,7 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
         ModelAction::Validate { wave } => {
             let (plan, _warnings) = model_plan::load(state_dir);
             let roles: Vec<String> = match &wave {
-                Some(w) => wave_role_slugs(w)
+                Some(w) => wave_roles::wave_role_slugs(w)
                     .map(|s| s.iter().map(|x| x.to_string()).collect())
                     .unwrap_or_else(|| plan.roles.keys().cloned().collect()),
                 None => plan.roles.keys().cloned().collect(),
@@ -1376,7 +1470,11 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
         ModelAction::Resolve { slug, json } => {
             let (plan, _warnings) = model_plan::load(state_dir);
             let fm = model_plan::find_frontmatter_model(&agents_dir, &slug);
-            let eff = model_plan::resolve_effective(&plan, &slug, fm.as_deref());
+            // No `--wave` flag on this subcommand (it's meant for single-slug, scriptable
+            // lookups) — fall back to the role's own wave via `role_wave` (best-effort for the
+            // W3/W6 multi-wave roles; see that function's doc comment).
+            let wave_ctx = wave_roles::role_wave(&slug);
+            let eff = model_plan::resolve_effective(&plan, &slug, fm.as_deref(), wave_ctx);
             if json {
                 println!(
                     "{}",
@@ -1408,7 +1506,7 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
 /// it should show the full "would-resolve-to-frontmatter" universe, not an empty table).
 fn roles_to_display(plan: &ModelPlan, wave: Option<&str>, agents_dir: &Path) -> Vec<String> {
     if let Some(w) = wave {
-        if let Some(slugs) = wave_role_slugs(w) {
+        if let Some(slugs) = wave_roles::wave_role_slugs(w) {
             return slugs.iter().map(|s| s.to_string()).collect();
         }
     }

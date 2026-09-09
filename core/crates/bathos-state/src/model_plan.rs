@@ -1,24 +1,28 @@
-//! `model_plan` — per-role model/runtime selection SSOT (`_state/model-plan.json`, schema
-//! `bathos/model-plan@1`).
+//! `model_plan` — per-role/per-wave model/runtime selection SSOT (`_state/model-plan.json`,
+//! schema `bathos/model-plan@1`).
 //!
-//! **Why this exists (ADR-D-0005/0006, `w2-panes-model-design-kr.md` §A):** BATHOS teammates
-//! can run on three different runtimes — Claude (in-process teammate, per-role model), GLM
+//! **Why this exists (ADR-D-0005/0006, `w2-panes-model-design-kr.md` §A, W5 task brief §3):**
+//! BATHOS teammates can run on six runtimes, in two dispatch shapes — Claude (in-process
+//! teammate, real per-role model) and Codex (a separate CLI process, no env conflict either
+//! way) need no process-wide coordination; Glm/Kimi/Deepseek/Qwen are all the *same* shape
 //! (process-wide `ANTHROPIC_BASE_URL` override — no per-role granularity is physically
-//! possible), and Codex (a separate CLI process). `model-plan.json` is the single place that
-//! records "which runtime/model each role should use this session", so `bathos model
-//! show|set|validate|resolve` (bathos-cli) and the wave commands all agree on one answer.
+//! possible, [`Runtime::is_env_global`]). `model-plan.json` is the single place that records
+//! "which runtime/model each role (or each wave, as a whole) should use this session", so
+//! `bathos model show|set|validate|resolve` (bathos-cli) and the wave commands all agree on one
+//! answer.
 //!
 //! **Backward compatibility is the load-bearing constraint.** A project that has never run
 //! `bathos model set` must behave *exactly* as before this feature existed: every role falls
 //! back to its agent-definition frontmatter `model:` field. [`resolve_effective`] encodes this
-//! as an explicit 4-step priority chain (plan.roles → plan.defaults → frontmatter → runtime
-//! default) so "no plan file" and "plan file present but this role unset" both degrade to the
-//! same pre-existing behavior — no silent behavior change for projects that don't opt in.
+//! as an explicit 5-step priority chain (plan.roles → plan.waves\[wave\] → plan.defaults →
+//! frontmatter → runtime default) so "no plan file", "plan file present but this role/wave
+//! unset", and "plan file from before the wave step existed" all degrade to the same
+//! pre-existing behavior — no silent behavior change for projects that don't opt in.
 //!
 //! **What this module does NOT do:** it never spawns a teammate, never touches
-//! `manifest.json`, and never talks to GLM/Codex processes. It only reads/writes
-//! `model-plan.json` and computes pure resolve/validate decisions. The actual runtime
-//! dispatch (spawn with `model:` param / require GLM session env / delegate to
+//! `manifest.json`, and never talks to any of the env-global/Codex processes. It only
+//! reads/writes `model-plan.json` and computes pure resolve/validate decisions. The actual
+//! runtime dispatch (spawn with `model:` param / require the matching session env / delegate to
 //! `codex-adapter/run-role.sh`) is the wave command's/CLI caller's job — kept out of this
 //! crate on purpose (bathos-state stays a state/decision layer, not an orchestrator).
 
@@ -33,14 +37,30 @@ use std::path::Path;
 /// `w2-panes-model-design-kr.md` §A1.2 "불일치 시 lenient 경고 후 무시하고 frontmatter 폴백".
 pub const SCHEMA_ID: &str = "bathos/model-plan@1";
 
-/// The three runtimes a role can be assigned to. `Copy`/`Eq` because resolve/validate compare
-/// these constantly and never need ownership of anything beyond the tag itself.
+/// The runtimes a role can be assigned to. `Copy`/`Eq` because resolve/validate compare these
+/// constantly and never need ownership of anything beyond the tag itself.
+///
+/// **Two dispatch shapes, not three (user decision 3):**
+/// - `Claude` — native in-process teammate, per-role model is a real capability.
+/// - `Codex` — a separate CLI subprocess (`codex-adapter/run-role.sh`); never touches
+///   `ANTHROPIC_BASE_URL`, so it never conflicts with anything else in the batch (ADR-D-0006).
+/// - `Glm`/`Kimi`/`Deepseek`/`Qwen` — all four are the *same* dispatch shape: a process-wide
+///   `ANTHROPIC_BASE_URL` swap (ADR-D-0005), just pointed at a different vendor endpoint (the
+///   auth env var name is *not* uniform across them — see [`env_auth_var`]; DeepSeek reads
+///   `ANTHROPIC_API_KEY`, the other three read `ANTHROPIC_AUTH_TOKEN`).
+///   [`Runtime::is_env_global`] is what tells the mixing rules "this one needs the whole
+///   process, not just this role" — adding a fifth such vendor later means adding one enum
+///   variant + one arm each in `is_env_global`/`env_backend`/`parse`/`as_str`, never new
+///   branching logic in [`validate_wave`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Runtime {
     Claude,
     Glm,
     Codex,
+    Kimi,
+    Deepseek,
+    Qwen,
 }
 
 impl Runtime {
@@ -51,8 +71,12 @@ impl Runtime {
             "claude" => Ok(Runtime::Claude),
             "glm" => Ok(Runtime::Glm),
             "codex" => Ok(Runtime::Codex),
+            "kimi" => Ok(Runtime::Kimi),
+            "deepseek" => Ok(Runtime::Deepseek),
+            "qwen" => Ok(Runtime::Qwen),
             other => Err(format!(
-                "[E-MODEL-RUNTIME-INVALID] 알 수 없는 runtime '{other}' (claude|glm|codex 중 하나)"
+                "[E-MODEL-RUNTIME-INVALID] 알 수 없는 runtime '{other}' \
+                 (claude|glm|codex|kimi|deepseek|qwen 중 하나)"
             )),
         }
     }
@@ -62,26 +86,85 @@ impl Runtime {
             Runtime::Claude => "claude",
             Runtime::Glm => "glm",
             Runtime::Codex => "codex",
+            Runtime::Kimi => "kimi",
+            Runtime::Deepseek => "deepseek",
+            Runtime::Qwen => "qwen",
+        }
+    }
+
+    /// **Single source of truth for the mixed-batch rule (§4-1 of the W5 task brief).**
+    /// `true` = this runtime can only run via a process-wide `ANTHROPIC_BASE_URL` swap, so it
+    /// can never coexist with a *different* backend (including plain `claude`) in the same
+    /// Claude Code process. `Codex` is deliberately `false` here even though it is also not
+    /// "plain claude" — it dispatches through a separate OS process (ADR-D-0006) and therefore
+    /// never touches this process's env, so it never needs to be excluded from a batch.
+    pub fn is_env_global(&self) -> bool {
+        matches!(
+            self,
+            Runtime::Glm | Runtime::Kimi | Runtime::Deepseek | Runtime::Qwen
+        )
+    }
+
+    /// The [`SessionBackend`] this runtime requires the *whole process* to already be running
+    /// under, or `None` for the two runtimes that don't need a process-wide env swap at all
+    /// (`Claude`, `Codex`). This is the one place that has to know the 1:1 correspondence
+    /// between an env-global `Runtime` variant and its `SessionBackend` counterpart — necessary
+    /// glue between the two enums (a role's *desired* runtime vs. the session's *actual*
+    /// backend), independent of the `is_env_global` boolean above.
+    pub fn env_backend(&self) -> Option<SessionBackend> {
+        match self {
+            Runtime::Glm => Some(SessionBackend::Glm),
+            Runtime::Kimi => Some(SessionBackend::Kimi),
+            Runtime::Deepseek => Some(SessionBackend::Deepseek),
+            Runtime::Qwen => Some(SessionBackend::Qwen),
+            Runtime::Claude | Runtime::Codex => None,
         }
     }
 }
 
 /// The **actual backend** the current Claude Code process is running under. Determined by
 /// `bathos model detect` inspecting `ANTHROPIC_BASE_URL` — this is a process-wide fact
-/// (`[실측 F2]` in the design doc: GLM env vars are not per-teammate), never a per-role choice.
+/// (`[실측 F2]` in the design doc: env-global vars are not per-teammate), never a per-role
+/// choice. Mirrors [`Runtime`]'s env-global variants 1:1 (see [`Runtime::env_backend`]) but
+/// deliberately has **no** `Codex` variant: Codex is a subprocess, never "the backend this
+/// Claude Code process is running under".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionBackend {
     Claude,
     Glm,
+    Kimi,
+    Deepseek,
+    Qwen,
 }
 
 impl SessionBackend {
     /// Pure classification so this is unit-testable without touching real env vars —
     /// `bathos model detect` (bathos-cli) supplies `std::env::var("ANTHROPIC_BASE_URL").ok()`.
+    ///
+    /// Host substrings come from the user-confirmed integration table (W5 task brief §3):
+    /// `api.z.ai` (GLM), `api.moonshot.ai` (Kimi), `api.deepseek.com` (Deepseek). An
+    /// unrecognized/unset host falls back to `Claude` — lenient by design (§A1.1 "정직한 한계":
+    /// a typo'd or future host must never silently become an *error*, only an
+    /// under-detection).
+    ///
+    /// **Qwen matches two known URL shapes, not one** — `assets/model-catalog.json`'s
+    /// `_url_discrepancy` note (added independently, in parallel, by the lead) found that
+    /// Alibaba's own docs disagree with itself: some material shows a fixed
+    /// `dashscope[-intl].aliyuncs.com` host, but the two official Model Studio pages instead
+    /// show a **templated** `{workspace}.{region}.maas.aliyuncs.com` host. Since either shape
+    /// might be what actually reaches Claude Code in practice, this matches both substrings
+    /// (`dashscope` and `maas.aliyuncs.com`) rather than picking one and silently
+    /// under-detecting the other — same lenient philosophy as the "unrecognized host" case
+    /// above, just with two known-good substrings instead of one.
     pub fn detect_from_base_url(base_url: Option<&str>) -> Self {
         match base_url {
             Some(url) if url.contains("api.z.ai") => SessionBackend::Glm,
+            Some(url) if url.contains("api.moonshot.ai") => SessionBackend::Kimi,
+            Some(url) if url.contains("api.deepseek.com") => SessionBackend::Deepseek,
+            Some(url) if url.contains("dashscope") || url.contains("maas.aliyuncs.com") => {
+                SessionBackend::Qwen
+            }
             _ => SessionBackend::Claude,
         }
     }
@@ -90,6 +173,21 @@ impl SessionBackend {
         match self {
             SessionBackend::Claude => "claude",
             SessionBackend::Glm => "glm",
+            SessionBackend::Kimi => "kimi",
+            SessionBackend::Deepseek => "deepseek",
+            SessionBackend::Qwen => "qwen",
+        }
+    }
+
+    /// Inverse of [`Runtime::env_backend`] — `None` for `Claude` (no runtime *requires* the
+    /// plain-claude session backend; it's simply the absence of an env-global override).
+    pub fn as_runtime(&self) -> Option<Runtime> {
+        match self {
+            SessionBackend::Claude => None,
+            SessionBackend::Glm => Some(Runtime::Glm),
+            SessionBackend::Kimi => Some(Runtime::Kimi),
+            SessionBackend::Deepseek => Some(Runtime::Deepseek),
+            SessionBackend::Qwen => Some(Runtime::Qwen),
         }
     }
 }
@@ -108,8 +206,9 @@ pub enum MixedPolicy {
 }
 
 /// One role's assignment. `model: None` means "use the runtime's own default" (for `claude`
-/// this falls through further down the resolve chain — frontmatter/runtime default; for
-/// `glm`/`codex` it means "let the session env / Codex install default decide").
+/// this falls through further down the resolve chain — frontmatter/runtime default; for the
+/// env-global runtimes / `codex` it means "let the session env / Codex install default
+/// decide").
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoleModelSpec {
     pub runtime: Runtime,
@@ -131,10 +230,28 @@ impl Default for RoleModelSpec {
 }
 
 /// Per-wave override block (`waves.<W?>`).
+///
+/// **Backward compatibility (DoD-required regression):** every new field below is
+/// `#[serde(default)]` + `skip_serializing_if` so an existing `model-plan.json` that only ever
+/// wrote `{"mixed_policy": "forbid"}` (or omitted `waves` entirely) still deserializes byte-for-
+/// byte the same as before this struct grew — see `wave_policy_backcompat_*` tests.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WavePolicy {
     #[serde(default)]
     pub mixed_policy: MixedPolicy,
+    /// Declarative "this wave runs on runtime X" plan entry (§4-5 resolve chain step 2). Gated
+    /// the same way `defaults.model` gates `defaults` (§A1.3 step 2): the wave step only fires
+    /// when `runtime` is set. A `WavePolicy` with only `model`/`reasoning_effort` set (no
+    /// `runtime`) is inert by design — a model string alone doesn't say *which* channel to send
+    /// it through, so requiring `runtime` keeps the wave step meaningful rather than adding a
+    /// second ad-hoc gate to reason about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<Runtime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// codex-only, same meaning as [`RoleModelSpec::reasoning_effort`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
 }
 
 /// The full `model-plan.json` document (`bathos/model-plan@1`).
@@ -357,7 +474,7 @@ pub fn find_frontmatter_model(agents_dir: &Path, slug: &str) -> Option<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// resolve — the 4-step priority chain (§A1.3, T1)
+// resolve — the 5-step priority chain (§4-5 of the W5 task brief, extends §A1.3's 4 steps)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Where an [`EffectiveModel`] value came from — surfaced by `bathos model show`/`resolve` so
@@ -366,6 +483,9 @@ pub fn find_frontmatter_model(agents_dir: &Path, slug: &str) -> Option<String> {
 pub enum Source {
     /// `model-plan.json` `roles.<slug>` entry.
     Plan,
+    /// `model-plan.json` `waves.<W?>` entry (only reached when that wave's `runtime` is set) —
+    /// new step inserted between `Plan` and `Default` (§4-5).
+    Wave,
     /// `model-plan.json` `defaults` block (only reached when `defaults.model` is set).
     Default,
     /// Agent-definition frontmatter `model:` field (pre-existing, 100% backward-compat path).
@@ -379,6 +499,7 @@ impl Source {
     pub fn as_str(&self) -> &'static str {
         match self {
             Source::Plan => "plan",
+            Source::Wave => "wave",
             Source::Default => "default",
             Source::Frontmatter => "frontmatter",
             Source::RuntimeDefault => "runtime-default",
@@ -395,20 +516,33 @@ pub struct EffectiveModel {
     pub source: Source,
 }
 
-/// Implements the exact 4-step priority chain from `w2-panes-model-design-kr.md` §A1.3:
+/// Implements the 5-step priority chain (§4-5 of the W5 task brief, extending
+/// `w2-panes-model-design-kr.md` §A1.3's original 4 steps with a wave-level step inserted
+/// between `roles` and `defaults` — more specific always wins):
 ///
 /// ```text
-/// effective(role) =
-///   1. model-plan.roles[slug]      (존재·유효 시)
-///   2. model-plan.defaults          (defaults.model != null 시)
-///   3. agent frontmatter `model`    (현행 동작 — plan 부재/파손 시 여기로 폴백)
-///   4. 런타임 기본 (claude=세션 기본 모델)
+/// effective(role, wave) =
+///   1. model-plan.roles[slug]         (존재·유효 시)
+///   2. model-plan.waves[wave]          (wave 지정 시, waves[wave].runtime != null일 때)
+///   3. model-plan.defaults             (defaults.model != null 시)
+///   4. agent frontmatter `model`       (현행 동작 — plan 부재/파손 시 여기로 폴백)
+///   5. 런타임 기본 (claude=세션 기본 모델)
 /// ```
 ///
-/// Step 2 is read literally: `defaults` is consulted **only** when `defaults.model` is
-/// non-null — an all-null `defaults` block (the common case) is skipped entirely, falling
-/// through to frontmatter. This is what makes "no plan file" and "plan file with an empty
-/// `defaults`" behave identically (both reach step 3/4) — the backward-compat guarantee.
+/// `wave_id` is an **explicit** parameter rather than something this function infers on its
+/// own (e.g. via a reverse role→wave lookup) — deliberately, for two reasons: (1) it keeps this
+/// a pure function of its arguments (no hidden dependency on a wave-roster table), and (2) a
+/// handful of roles (Thomas/Matthias/Timothy) belong to *two* waves (W3 and W6), so "the wave
+/// this role belongs to" is not always a single well-defined answer — only the caller (which
+/// knows which wave command is currently running) can say which one applies. Callers with no
+/// wave context at all (e.g. `bathos model resolve <slug>` without `--wave`) may pass
+/// `wave_roles::role_wave(slug)` as a best-effort default; see that function's doc comment for
+/// exactly what "best-effort" means for multi-wave roles.
+///
+/// Step 2 (wave) is gated on `waves[wave].runtime` being non-null for the same reason step 3
+/// (defaults) is gated on `defaults.model` being non-null: it's what makes "no plan file" and
+/// "plan file with an unrelated/empty wave entry" behave identically (both fall through) — the
+/// backward-compat guarantee.
 ///
 /// Pure function — no filesystem access (the caller reads `model-plan.json` via [`load`] and
 /// frontmatter via [`find_frontmatter_model`] beforehand) — fully unit-testable (T1).
@@ -416,6 +550,7 @@ pub fn resolve_effective(
     plan: &ModelPlan,
     slug: &str,
     frontmatter_model: Option<&str>,
+    wave_id: Option<&str>,
 ) -> EffectiveModel {
     if let Some(spec) = plan.roles.get(slug) {
         return EffectiveModel {
@@ -424,6 +559,16 @@ pub fn resolve_effective(
             reasoning_effort: spec.reasoning_effort.clone(),
             source: Source::Plan,
         };
+    }
+    if let Some(wave_policy) = wave_id.and_then(|w| plan.waves.get(w)) {
+        if let Some(runtime) = wave_policy.runtime {
+            return EffectiveModel {
+                runtime,
+                model: wave_policy.model.clone(),
+                reasoning_effort: wave_policy.reasoning_effort.clone(),
+                source: Source::Wave,
+            };
+        }
     }
     if let Some(m) = &plan.defaults.model {
         return EffectiveModel {
@@ -456,9 +601,14 @@ pub fn resolve_effective(
 /// so the frontmatter-fallback step of the full chain is a no-op runtime-wise. This lets
 /// mixed-batch validation stay a pure, filesystem-free function (fully unit-testable, T2)
 /// while still being consistent with [`resolve_effective`]'s behavior.
-pub fn resolve_effective_runtime(plan: &ModelPlan, slug: &str) -> Runtime {
+pub fn resolve_effective_runtime(plan: &ModelPlan, slug: &str, wave_id: Option<&str>) -> Runtime {
     if let Some(spec) = plan.roles.get(slug) {
         return spec.runtime;
+    }
+    if let Some(wave_policy) = wave_id.and_then(|w| plan.waves.get(w)) {
+        if let Some(runtime) = wave_policy.runtime {
+            return runtime;
+        }
     }
     if plan.defaults.model.is_some() {
         return plan.defaults.runtime;
@@ -467,11 +617,12 @@ pub fn resolve_effective_runtime(plan: &ModelPlan, slug: &str) -> Runtime {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// validate — mixed-batch rules R1~R4 (§A3.2, T2)
+// validate — mixed-batch rules, generalized from GLM-only R1~R4 to any env-global runtime
+// (§A3.2 original design + §4-6 of the W5 task brief's "session-backend mismatch gate")
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A blocked `bathos model validate` result — always exit-2 material. Carries the resolution
-/// menu verbatim from §A3.2 R3 so the CLI/hook layer never has to re-derive it.
+/// menu verbatim so the CLI/hook layer never has to re-derive it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MixViolation {
     pub code: &'static str,
@@ -479,34 +630,130 @@ pub struct MixViolation {
     pub resolutions: Vec<String>,
 }
 
-/// The R3 resolution menu (identical wording regardless of which rule fired — both R2/R3 and
-/// R4 are solved by the same three moves: go all-GLM, move the role elsewhere, or split the
-/// wave across two sessions).
-fn r3_resolutions() -> Vec<String> {
+/// The connection detail for one env-global runtime, used **only** to render an honest,
+/// concrete transition instruction in [`MixViolation::resolutions`] — this module makes no
+/// network calls, it only ever prints where the caller could point `ANTHROPIC_BASE_URL`.
+///
+/// ponytail: Glm/Kimi/Deepseek's endpoints are hardcoded here as fixed constants (there are
+/// only 3 of them and they change about as often as `Runtime` itself gains a variant — a code
+/// change either way). **Qwen is a different kind of limitation, not the same one** — its
+/// endpoint is inherently *not* a constant (`{workspace}.{region}.maas.aliyuncs.com` is a
+/// template with two required substitutions this crate has no way to fill in), so hardcoding a
+/// single Qwen URL would be actively wrong, not just brittle; that's why its arm below prints
+/// the template shape plus a pointer to the catalog/console instead of a URL string. Ceiling:
+/// a vendor migrates one of the 3 fixed endpoints, or the Glm/Kimi/Deepseek→Qwen shape ratio
+/// stops being 3-fixed/1-templated (e.g. a 5th runtime is also templated). Upgrade path: load
+/// `assets/model-catalog.json` (the lead's model catalog already carries `env.ANTHROPIC_BASE_URL`
+/// per provider, plus `url_is_templated`/`regions[]` for Qwen specifically) once this crate is
+/// allowed to depend on runtime asset I/O for a CLI-only display string.
+fn env_endpoint_hint(runtime: Runtime) -> &'static str {
+    match runtime {
+        Runtime::Glm => "https://api.z.ai/api/anthropic (scripts/glm-env.sh 존재)",
+        Runtime::Kimi => "https://api.moonshot.ai/anthropic",
+        Runtime::Deepseek => "https://api.deepseek.com/anthropic",
+        Runtime::Qwen => {
+            // Two URL shapes are both attested (see `SessionBackend::detect_from_base_url`'s
+            // doc comment) and this crate cannot pick a winner without fabricating certainty
+            // the source material doesn't have — so the hint says both, explicitly flagged as
+            // unconfirmed, instead of asserting one as fact.
+            "https://dashscope-intl.aliyuncs.com/apps/anthropic 또는 \
+             https://{workspace}.{region}.maas.aliyuncs.com/apps/anthropic \
+             (⚠ 두 URL 형태가 자료마다 다름 — assets/model-catalog.json qwen._url_discrepancy \
+             참고, 사용 전 Model Studio 콘솔에서 실제 엔드포인트 확인 필요)"
+        }
+        Runtime::Claude | Runtime::Codex => "(env-global 아님 — 해당 없음)",
+    }
+}
+
+/// Which env var carries the API key for a given env-global runtime's `ANTHROPIC_BASE_URL`
+/// swap. **Not uniform across providers** — this is a fact, confirmed against DeepSeek's own
+/// docs (api-docs.deepseek.com/guides/anthropic_api/), not an assumption: DeepSeek's Anthropic-
+/// compat endpoint reads `ANTHROPIC_API_KEY` (or an `x-api-key` header), *not*
+/// `ANTHROPIC_AUTH_TOKEN` the way Glm/Kimi/Qwen do. Naming the wrong var in a transition
+/// instruction is worse than a vague one (it actively misleads), so this small mapping exists
+/// specifically to keep resolution #3 below correct per-provider instead of copy-pasting one
+/// var name for all four.
+fn env_auth_var(runtime: Runtime) -> &'static str {
+    match runtime {
+        Runtime::Deepseek => "ANTHROPIC_API_KEY",
+        Runtime::Glm | Runtime::Kimi | Runtime::Qwen => "ANTHROPIC_AUTH_TOKEN",
+        Runtime::Claude | Runtime::Codex => "(env-global 아님 — 해당 없음)",
+    }
+}
+
+/// The resolution menu for an env-global mixing violation — same 3 moves regardless of which
+/// runtime triggered it (go all-in on that runtime, move the conflicting role elsewhere, or
+/// split the wave across two sessions), but now naming the *actual* target runtime and its
+/// real endpoint instead of hardcoding "GLM"/`glm-env.sh` the way the original R3 menu did.
+///
+/// ponytail: only `scripts/glm-env.sh` exists on disk today (Kimi/Deepseek/Qwen have no
+/// equivalent env-swap script yet — that's `scripts/` territory, owned by the lead, not this
+/// crate). Resolution #3 below therefore gives the raw `export ANTHROPIC_BASE_URL=...` /
+/// `<auth var>=...` pair rather than inventing a script path that doesn't exist.
+/// Upgrade path: once `scripts/<runtime>-env.sh` exists for a given runtime, this can name it
+/// directly the way the Glm case already does.
+fn transition_resolutions(target: Runtime) -> Vec<String> {
+    let endpoint = env_endpoint_hint(target);
+    let auth_var = env_auth_var(target);
+    let name = target.as_str();
     vec![
-        "1) 배치 전체 GLM: 이 웨이브 모든 역할을 runtime=glm으로 통일(사용자 승인 필요)".into(),
-        "2) 역할 이동: GLM 희망 역할을 claude 또는 codex로 변경".into(),
-        "3) 웨이브 순차 분할: claude 배치를 현 세션에서 먼저 완료·shutdown → \
-           GLM 세션으로 재기동 후 재개(`source scripts/glm-env.sh` → `claude`)"
+        format!(
+            "1) 배치 전체 {name}: 이 웨이브 모든 역할을 runtime={name}으로 통일(사용자 승인 필요) \
+             — ANTHROPIC_BASE_URL={endpoint}"
+        ),
+        format!("2) 역할 이동: {name} 희망 역할을 claude 또는 codex로 변경"),
+        format!(
+            "3) 웨이브 순차 분할: 현재 배치를 먼저 완료·shutdown → \
+             ANTHROPIC_BASE_URL={endpoint} + {auth_var}=<키> 로 새 세션 재기동 후 재개"
+        ),
+    ]
+}
+
+/// Resolution menu for Rule 1 (two-or-more *different* env-global runtimes requested in the
+/// same batch). Deliberately generic — with N>=2 conflicting runtimes there is no single
+/// "target" to name the way [`transition_resolutions`] can for the one-vs-session case, so this
+/// lists the conflict set once and gives the same 3 structural moves without repeating a full
+/// per-runtime endpoint block for each candidate (which would multiply with N and bury the
+/// actually-actionable choice: pick one).
+fn multi_env_global_resolutions(conflicting: &[&str]) -> Vec<String> {
+    let list = conflicting.join(", ");
+    vec![
+        format!("1) 하나만 선택: {list} 중 하나를 이 웨이브의 env-global 런타임으로 통일"),
+        format!(
+            "2) 역할 이동: {list} 중 소수 역할을 claude 또는 codex로 변경해 후보를 하나로 축소"
+        ),
+        "3) 웨이브 순차 분할: 후보 런타임별로 세션을 나눠(각자 env swap 후 재기동) 순차 진행"
             .into(),
     ]
 }
 
-/// Validates a wave's role batch against the GLM process-wide-env constraint (ADR-D-0005).
+/// Validates a wave's role batch against the env-global process-wide-env constraint
+/// (ADR-D-0005, generalized from GLM-only to `Glm|Kimi|Deepseek|Qwen` via
+/// [`Runtime::is_env_global`] — adding a 5th env-global runtime touches that one predicate, not
+/// this function's branching).
 ///
-/// - **R2/R3 (`E-MODEL-MIX`)**: any role in `role_slugs` resolves to `Runtime::Glm` while
-///   `plan.session_backend != Glm` — GLM cannot run for just that one role in this session.
-/// - **R4 (`E-MODEL-BACKEND-MISMATCH`)**: `plan.session_backend == Glm` but some role has an
-///   *explicit* `roles.<slug>.runtime = claude` entry — that explicit choice cannot be honored
-///   (the whole process is already GLM). A role that simply has no plan entry (implicit
-///   claude via the runtime default) does **not** trigger this — only an explicit, contradicted
-///   choice is a violation (nothing to contradict = nothing to reject).
+/// - **Rule 1 (`E-MODEL-MIX`, new — no GLM-only equivalent existed because only one env-global
+///   runtime existed before): two *different* env-global runtimes both requested in the same
+///   batch** (e.g. one role wants `kimi`, another wants `deepseek`). No single process-wide
+///   `ANTHROPIC_BASE_URL` can satisfy both, independent of what `session_backend` currently is.
+/// - **Rule 2 (`E-MODEL-MIX`, generalizes old R2/R3): the session-backend mismatch gate
+///   (§4-6)** — exactly one env-global runtime is requested but `plan.session_backend` isn't
+///   already running under that runtime's backend. `resolutions` carries the concrete
+///   transition steps (which env var, which endpoint, how to restart).
+/// - **Rule 3 (`E-MODEL-BACKEND-MISMATCH`, generalizes old R4): `plan.session_backend` is
+///   already some env-global backend, but a role has an *explicit* `roles.<slug>.runtime =
+///   claude` entry** — that explicit choice cannot be honored (the whole process is already
+///   that backend). A role with no plan entry at all (implicit claude via the runtime default)
+///   does **not** trigger this — only an explicit, contradicted choice is a violation.
 /// - **Codex roles never block**: a separate process, no env conflict either direction
-///   (ADR-D-0006 "정직한 비대칭").
+///   (ADR-D-0006 "정직한 비대칭") — `is_env_global()` is `false` for `Codex`, so it's simply
+///   never a candidate in Rule 1/2 and never `session_backend`'s value in Rule 3.
 ///
-/// `role_slugs` should be the wave's role roster (see `WAVE_ROLE_MAP` in bathos-cli, sourced
-/// from `CLAUDE.md` §1/§2's role↔wave table) — or, if the caller wants a whole-plan check
-/// (`--wave` omitted), every key currently present in `plan.roles`.
+/// `role_slugs` should be the wave's role roster (see `bathos_state::wave_roles`, sourced from
+/// `CLAUDE.md` §1/§2's role↔wave table) — or, if the caller wants a whole-plan check (`--wave`
+/// omitted), every key currently present in `plan.roles`. `wave_id` is used both as the label in
+/// error messages and, via [`resolve_effective_runtime`]'s wave step, to apply that wave's
+/// `waves.<wave_id>` policy (if any) to roles with no explicit `roles.<slug>` entry.
 pub fn validate_wave(
     plan: &ModelPlan,
     wave_id: &str,
@@ -514,29 +761,61 @@ pub fn validate_wave(
 ) -> Result<(), MixViolation> {
     let runtimes: Vec<(String, Runtime)> = role_slugs
         .iter()
-        .map(|s| (s.clone(), resolve_effective_runtime(plan, s)))
+        .map(|s| (s.clone(), resolve_effective_runtime(plan, s, Some(wave_id))))
         .collect();
 
-    let glm_roles: Vec<&str> = runtimes
+    let env_global_roles: Vec<(&str, Runtime)> = runtimes
         .iter()
-        .filter(|(_, r)| *r == Runtime::Glm)
-        .map(|(s, _)| s.as_str())
+        .filter(|(_, r)| r.is_env_global())
+        .map(|(s, r)| (s.as_str(), *r))
         .collect();
 
-    if !glm_roles.is_empty() && plan.session_backend != SessionBackend::Glm {
+    let mut distinct_runtimes: Vec<Runtime> = env_global_roles.iter().map(|(_, r)| *r).collect();
+    distinct_runtimes.sort_by_key(|r| r.as_str());
+    distinct_runtimes.dedup();
+
+    // Rule 1 — two different env-global runtimes both wanted in one batch.
+    if distinct_runtimes.len() > 1 {
+        let names: Vec<&str> = distinct_runtimes.iter().map(|r| r.as_str()).collect();
         return Err(MixViolation {
             code: "E-MODEL-MIX",
             message: format!(
-                "[E-MODEL-MIX] wave={wave_id} — GLM 지정 역할({}) 존재하나 session_backend={}(GLM 아님). \
-                 GLM은 프로세스 전역 env라 역할 단위 분리가 물리적으로 불가합니다.",
-                glm_roles.join(", "),
-                plan.session_backend.as_str()
+                "[E-MODEL-MIX] wave={wave_id} — 서로 다른 env-global 런타임({}) 이 한 배치에 \
+                 동시 요청됨. env-global 백엔드는 프로세스 전역 하나뿐이라 둘 이상 동시 구동이 \
+                 불가합니다.",
+                names.join(", ")
             ),
-            resolutions: r3_resolutions(),
+            resolutions: multi_env_global_resolutions(&names),
         });
     }
 
-    if plan.session_backend == SessionBackend::Glm {
+    // Rule 2 — the session-backend transition gate (§4-6): exactly one env-global runtime is
+    // requested; it must already match the session's actual backend.
+    if let Some(&target) = distinct_runtimes.first() {
+        let expected_backend = target
+            .env_backend()
+            .expect("is_env_global() true implies env_backend() is Some");
+        if plan.session_backend != expected_backend {
+            let names: Vec<&str> = env_global_roles.iter().map(|(s, _)| *s).collect();
+            return Err(MixViolation {
+                code: "E-MODEL-MIX",
+                message: format!(
+                    "[E-MODEL-MIX] wave={wave_id} — {} 지정 역할({}) 존재하나 session_backend={}\
+                     ({} 아님). env-global 런타임은 프로세스 전역이라 역할 단위 분리가 물리적으로 \
+                     불가합니다.",
+                    target.as_str(),
+                    names.join(", "),
+                    plan.session_backend.as_str(),
+                    target.as_str()
+                ),
+                resolutions: transition_resolutions(target),
+            });
+        }
+    }
+
+    // Rule 3 — the session is already running under SOME env-global backend; an explicit
+    // `runtime=claude` role entry contradicts that and cannot be honored.
+    if let Some(session_runtime) = plan.session_backend.as_runtime() {
         let explicit_claude: Vec<&str> = role_slugs
             .iter()
             .filter(|s| {
@@ -551,11 +830,14 @@ pub fn validate_wave(
             return Err(MixViolation {
                 code: "E-MODEL-BACKEND-MISMATCH",
                 message: format!(
-                    "[E-MODEL-BACKEND-MISMATCH] wave={wave_id} — session_backend=glm인데 \
-                     명시적 runtime=claude 역할({}) 존재. 이 세션에서 claude 지정은 이행 불가(전부 GLM으로 나감).",
-                    explicit_claude.join(", ")
+                    "[E-MODEL-BACKEND-MISMATCH] wave={wave_id} — session_backend={}인데 \
+                     명시적 runtime=claude 역할({}) 존재. 이 세션에서 claude 지정은 이행 불가\
+                     (전부 {}로 나감).",
+                    plan.session_backend.as_str(),
+                    explicit_claude.join(", "),
+                    plan.session_backend.as_str()
                 ),
-                resolutions: r3_resolutions(),
+                resolutions: transition_resolutions(session_runtime),
             });
         }
     }
@@ -581,54 +863,141 @@ mod tests {
         plan
     }
 
-    // ── T1: resolve priority chain (4 steps × missing/corrupt) ──────────────
+    // ── T1: resolve priority chain (5 steps × missing/corrupt) ──────────────
 
     #[test]
     fn resolve_step1_plan_role_wins_over_everything() {
         let plan = plan_with_role("phillip-backend-engineer", Runtime::Codex, None);
-        let eff = resolve_effective(&plan, "phillip-backend-engineer", Some("claude-sonnet-5"));
+        let eff = resolve_effective(
+            &plan,
+            "phillip-backend-engineer",
+            Some("claude-sonnet-5"),
+            None,
+        );
         assert_eq!(eff.runtime, Runtime::Codex);
         assert_eq!(eff.source, Source::Plan);
     }
 
     #[test]
-    fn resolve_step2_defaults_used_when_model_set_and_no_role_entry() {
+    fn resolve_step1_plan_role_wins_even_over_a_matching_wave_entry() {
+        // roles[slug] is more specific than waves[wave] — it must win even when a wave policy
+        // for the same wave also exists (§4-5 "더 구체적인 것이 이김").
+        let mut plan = plan_with_role("phillip-backend-engineer", Runtime::Codex, None);
+        plan.waves.insert(
+            "W5".into(),
+            WavePolicy {
+                runtime: Some(Runtime::Kimi),
+                ..Default::default()
+            },
+        );
+        let eff = resolve_effective(&plan, "phillip-backend-engineer", None, Some("W5"));
+        assert_eq!(eff.runtime, Runtime::Codex);
+        assert_eq!(eff.source, Source::Plan);
+    }
+
+    #[test]
+    fn resolve_step2_wave_used_when_runtime_set_and_no_role_entry() {
+        let mut plan = ModelPlan::empty("Paul");
+        plan.waves.insert(
+            "W5".into(),
+            WavePolicy {
+                runtime: Some(Runtime::Deepseek),
+                model: Some("deepseek-chat".into()),
+                ..Default::default()
+            },
+        );
+        let eff = resolve_effective(
+            &plan,
+            "andrew-frontend-engineer",
+            Some("claude-sonnet-5"),
+            Some("W5"),
+        );
+        assert_eq!(eff.runtime, Runtime::Deepseek);
+        assert_eq!(eff.model.as_deref(), Some("deepseek-chat"));
+        assert_eq!(eff.source, Source::Wave);
+    }
+
+    #[test]
+    fn resolve_step2_skipped_when_wave_runtime_is_null_or_wave_unset() {
+        // a WavePolicy with only `mixed_policy` set (no `runtime`) is inert — falls through
+        // exactly like no wave entry existed (this is the backward-compat fixture shape: old
+        // files only ever wrote `mixed_policy`).
+        let mut plan = ModelPlan::empty("Paul");
+        plan.waves.insert("W5".into(), WavePolicy::default());
+        let eff = resolve_effective(
+            &plan,
+            "andrew-frontend-engineer",
+            Some("claude-sonnet-5"),
+            Some("W5"),
+        );
+        assert_eq!(eff.source, Source::Frontmatter);
+
+        // no `wave_id` passed at all → the wave step is skipped outright, even though a
+        // matching (and populated) wave entry exists in the plan.
+        plan.waves.insert(
+            "W5".into(),
+            WavePolicy {
+                runtime: Some(Runtime::Qwen),
+                ..Default::default()
+            },
+        );
+        let eff_no_wave_ctx = resolve_effective(
+            &plan,
+            "andrew-frontend-engineer",
+            Some("claude-sonnet-5"),
+            None,
+        );
+        assert_eq!(eff_no_wave_ctx.source, Source::Frontmatter);
+    }
+
+    #[test]
+    fn resolve_step3_defaults_used_when_model_set_and_no_role_or_wave_entry() {
         let mut plan = ModelPlan::empty("Paul");
         plan.defaults = RoleModelSpec {
             runtime: Runtime::Glm,
             model: Some("glm-4.7".into()),
             reasoning_effort: None,
         };
-        let eff = resolve_effective(&plan, "andrew-frontend-engineer", Some("claude-sonnet-5"));
+        let eff = resolve_effective(
+            &plan,
+            "andrew-frontend-engineer",
+            Some("claude-sonnet-5"),
+            None,
+        );
         assert_eq!(eff.runtime, Runtime::Glm);
         assert_eq!(eff.model.as_deref(), Some("glm-4.7"));
         assert_eq!(eff.source, Source::Default);
     }
 
     #[test]
-    fn resolve_step2_skipped_when_defaults_model_is_null() {
-        // defaults.model == None → step 2 is a no-op even though defaults.runtime is set —
+    fn resolve_step3_skipped_when_defaults_model_is_null() {
+        // defaults.model == None → step 3 is a no-op even though defaults.runtime is set —
         // this is the literal reading of "(defaults.model != null 시)" that keeps an empty
         // plan behaviorally identical to no plan at all.
         let plan = ModelPlan::empty("Paul");
-        let eff = resolve_effective(&plan, "andrew-frontend-engineer", Some("claude-sonnet-5"));
+        let eff = resolve_effective(
+            &plan,
+            "andrew-frontend-engineer",
+            Some("claude-sonnet-5"),
+            None,
+        );
         assert_eq!(eff.source, Source::Frontmatter);
         assert_eq!(eff.model.as_deref(), Some("claude-sonnet-5"));
     }
 
     #[test]
-    fn resolve_step3_frontmatter_fallback_when_plan_absent() {
+    fn resolve_step4_frontmatter_fallback_when_plan_absent() {
         let plan = ModelPlan::empty("system");
-        let eff = resolve_effective(&plan, "james-architect", Some("claude-fable-5"));
+        let eff = resolve_effective(&plan, "james-architect", Some("claude-fable-5"), None);
         assert_eq!(eff.runtime, Runtime::Claude);
         assert_eq!(eff.model.as_deref(), Some("claude-fable-5"));
         assert_eq!(eff.source, Source::Frontmatter);
     }
 
     #[test]
-    fn resolve_step4_runtime_default_when_nothing_matches() {
+    fn resolve_step5_runtime_default_when_nothing_matches() {
         let plan = ModelPlan::empty("system");
-        let eff = resolve_effective(&plan, "unknown-slug", None);
+        let eff = resolve_effective(&plan, "unknown-slug", None, None);
         assert_eq!(eff.runtime, Runtime::Claude);
         assert_eq!(eff.model, None);
         assert_eq!(eff.source, Source::RuntimeDefault);
@@ -641,11 +1010,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let (loaded, warnings) = load(dir.path());
         assert!(warnings.is_empty());
-        let eff_loaded = resolve_effective(&loaded, "phillip-backend-engineer", Some("m"));
+        let eff_loaded = resolve_effective(&loaded, "phillip-backend-engineer", Some("m"), None);
         let eff_empty = resolve_effective(
             &ModelPlan::empty("system"),
             "phillip-backend-engineer",
             Some("m"),
+            None,
         );
         assert_eq!(eff_loaded, eff_empty);
     }
@@ -703,6 +1073,76 @@ mod tests {
             loaded.roles["phillip-backend-engineer"].model.as_deref(),
             Some("claude-sonnet-5")
         );
+    }
+
+    // ── WavePolicy backward compatibility (DoD-required regression) ─────────
+
+    #[test]
+    fn wave_policy_backcompat_old_mixed_policy_only_file_loads_unchanged() {
+        // The exact shape `w2-panes-model-design-kr.md` §A1.1 documented BEFORE this task added
+        // `runtime`/`model`/`reasoning_effort` to `WavePolicy` — a project that ran `bathos
+        // model set` before this feature existed must still load without error or field loss.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("model-plan.json"),
+            r#"{
+                "schema": "bathos/model-plan@1",
+                "updated": "2026-07-16T12:00:00Z",
+                "updated_by": "Paul",
+                "session_backend": "claude",
+                "defaults": {"runtime": "claude", "model": null},
+                "roles": {},
+                "waves": {"W5": {"mixed_policy": "forbid"}}
+            }"#,
+        )
+        .unwrap();
+        let (plan, warnings) = load(dir.path());
+        assert!(warnings.is_empty());
+        let w5 = &plan.waves["W5"];
+        assert_eq!(w5.mixed_policy, MixedPolicy::Forbid);
+        assert_eq!(w5.runtime, None);
+        assert_eq!(w5.model, None);
+        assert_eq!(w5.reasoning_effort, None);
+    }
+
+    #[test]
+    fn wave_policy_backcompat_missing_waves_field_entirely_loads_unchanged() {
+        // Even older shape: no `waves` key at all (pre-dates `mixed_policy` too).
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("model-plan.json"),
+            r#"{
+                "schema": "bathos/model-plan@1",
+                "updated": "2026-07-16T12:00:00Z",
+                "updated_by": "Paul",
+                "session_backend": "claude"
+            }"#,
+        )
+        .unwrap();
+        let (plan, warnings) = load(dir.path());
+        assert!(warnings.is_empty());
+        assert!(plan.waves.is_empty());
+        assert!(plan.roles.is_empty());
+    }
+
+    #[test]
+    fn wave_policy_new_fields_roundtrip_through_save_and_load() {
+        let dir = TempDir::new().unwrap();
+        let mut plan = ModelPlan::empty("Paul");
+        plan.waves.insert(
+            "W5".into(),
+            WavePolicy {
+                mixed_policy: MixedPolicy::Forbid,
+                runtime: Some(Runtime::Kimi),
+                model: Some("kimi-k2".into()),
+                reasoning_effort: None,
+            },
+        );
+        save(dir.path(), &plan).unwrap();
+        let (loaded, warnings) = load(dir.path());
+        assert!(warnings.is_empty());
+        assert_eq!(loaded.waves["W5"].runtime, Some(Runtime::Kimi));
+        assert_eq!(loaded.waves["W5"].model.as_deref(), Some("kimi-k2"));
     }
 
     // ── frontmatter parsing (pure string fixtures — T1 support) ─────────────
@@ -850,6 +1290,103 @@ mod tests {
         assert!(validate_wave(&plan, "W5", &roles).is_ok());
     }
 
+    #[test]
+    fn validate_kimi_role_in_claude_session_is_mix_violation() {
+        // Same shape as the old GLM-only R2/R3 case, but for one of the 3 newly-added
+        // env-global runtimes — proves the generalization via `is_env_global()` actually covers
+        // them, not just `Glm`.
+        let plan = plan_with_role("stephen-ml-engineer", Runtime::Kimi, Some("kimi-k2"));
+        let roles = vec!["stephen-ml-engineer".to_string()];
+        let err = validate_wave(&plan, "W5", &roles).unwrap_err();
+        assert_eq!(err.code, "E-MODEL-MIX");
+        assert_eq!(err.resolutions.len(), 3);
+    }
+
+    #[test]
+    fn validate_matching_env_global_session_passes_for_every_new_runtime() {
+        for (runtime, backend) in [
+            (Runtime::Glm, SessionBackend::Glm),
+            (Runtime::Kimi, SessionBackend::Kimi),
+            (Runtime::Deepseek, SessionBackend::Deepseek),
+            (Runtime::Qwen, SessionBackend::Qwen),
+        ] {
+            let mut plan = plan_with_role("stephen-ml-engineer", runtime, None);
+            plan.session_backend = backend;
+            let roles = vec!["stephen-ml-engineer".to_string()];
+            assert!(
+                validate_wave(&plan, "W5", &roles).is_ok(),
+                "runtime {runtime:?} should pass when session_backend already matches"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_two_distinct_env_global_runtimes_in_one_batch_is_mix_violation() {
+        // Rule 1 — this case was *impossible* before Kimi/Deepseek/Qwen existed (there was only
+        // one env-global runtime, so "two different ones requested" couldn't happen).
+        let mut plan = ModelPlan::empty("Paul");
+        plan.roles.insert(
+            "stephen-ml-engineer".into(),
+            RoleModelSpec {
+                runtime: Runtime::Kimi,
+                model: None,
+                reasoning_effort: None,
+            },
+        );
+        plan.roles.insert(
+            "andrew-frontend-engineer".into(),
+            RoleModelSpec {
+                runtime: Runtime::Deepseek,
+                model: None,
+                reasoning_effort: None,
+            },
+        );
+        let roles = vec![
+            "stephen-ml-engineer".to_string(),
+            "andrew-frontend-engineer".to_string(),
+        ];
+        let err = validate_wave(&plan, "W5", &roles).unwrap_err();
+        assert_eq!(err.code, "E-MODEL-MIX");
+        assert_eq!(err.resolutions.len(), 3);
+    }
+
+    #[test]
+    fn validate_wave_policy_runtime_feeds_into_mix_check_for_unassigned_roles() {
+        // A role with NO `roles.<slug>` entry still picks up the wave's `runtime` override
+        // (§4-5 resolve chain step 2) — validate_wave must see that, not just explicit
+        // per-role entries, or the transition gate would silently miss wave-level assignments.
+        let mut plan = ModelPlan::empty("Paul");
+        plan.waves.insert(
+            "W5".into(),
+            WavePolicy {
+                runtime: Some(Runtime::Qwen),
+                ..Default::default()
+            },
+        );
+        let roles = vec!["andrew-frontend-engineer".to_string()];
+        let err = validate_wave(&plan, "W5", &roles).unwrap_err();
+        assert_eq!(err.code, "E-MODEL-MIX");
+
+        // ...but validating a *different* wave with no such policy entry doesn't see it at all
+        // (the wave-scoping is real, not a global default in disguise).
+        assert!(validate_wave(&plan, "W6", &roles).is_ok());
+    }
+
+    #[test]
+    fn validate_explicit_claude_in_deepseek_session_is_backend_mismatch() {
+        // Rule 3 generalized beyond GLM: session already env-global under a DIFFERENT
+        // runtime, explicit claude still cannot be honored.
+        let mut plan = plan_with_role(
+            "phillip-backend-engineer",
+            Runtime::Claude,
+            Some("claude-sonnet-5"),
+        );
+        plan.session_backend = SessionBackend::Deepseek;
+        let roles = vec!["phillip-backend-engineer".to_string()];
+        let err = validate_wave(&plan, "W5", &roles).unwrap_err();
+        assert_eq!(err.code, "E-MODEL-BACKEND-MISMATCH");
+    }
+
     // ── SessionBackend detection ─────────────────────────────────────────────
 
     #[test]
@@ -872,14 +1409,107 @@ mod tests {
         );
     }
 
-    // ── Runtime::parse ────────────────────────────────────────────────────────
+    #[test]
+    fn session_backend_detects_each_new_env_global_host() {
+        assert_eq!(
+            SessionBackend::detect_from_base_url(Some("https://api.moonshot.ai/anthropic")),
+            SessionBackend::Kimi
+        );
+        assert_eq!(
+            SessionBackend::detect_from_base_url(Some("https://api.deepseek.com/anthropic")),
+            SessionBackend::Deepseek
+        );
+        // Qwen: both attested URL shapes must be detected — the fixed `dashscope[-intl]` host
+        // some material shows, AND the templated `{workspace}.{region}.maas.aliyuncs.com` host
+        // Alibaba's own Model Studio docs show (see `detect_from_base_url`'s doc comment on
+        // this `_url_discrepancy` — not picking a winner between two attested shapes).
+        assert_eq!(
+            SessionBackend::detect_from_base_url(Some(
+                "https://dashscope-intl.aliyuncs.com/apps/anthropic"
+            )),
+            SessionBackend::Qwen
+        );
+        assert_eq!(
+            SessionBackend::detect_from_base_url(Some(
+                "https://dashscope.aliyuncs.com/apps/anthropic"
+            )),
+            SessionBackend::Qwen
+        );
+        assert_eq!(
+            SessionBackend::detect_from_base_url(Some(
+                "https://my-workspace.ap-southeast-1.maas.aliyuncs.com/apps/anthropic"
+            )),
+            SessionBackend::Qwen
+        );
+    }
+
+    // ── Runtime::parse / is_env_global / env_backend ─────────────────────────
 
     #[test]
     fn runtime_parse_case_insensitive_and_rejects_unknown() {
         assert_eq!(Runtime::parse("CLAUDE").unwrap(), Runtime::Claude);
         assert_eq!(Runtime::parse("glm").unwrap(), Runtime::Glm);
         assert_eq!(Runtime::parse("Codex").unwrap(), Runtime::Codex);
+        assert_eq!(Runtime::parse("KIMI").unwrap(), Runtime::Kimi);
+        assert_eq!(Runtime::parse("deepseek").unwrap(), Runtime::Deepseek);
+        assert_eq!(Runtime::parse("Qwen").unwrap(), Runtime::Qwen);
         assert!(Runtime::parse("bogus").is_err());
+    }
+
+    #[test]
+    fn is_env_global_is_true_only_for_the_four_process_wide_runtimes() {
+        assert!(!Runtime::Claude.is_env_global());
+        assert!(!Runtime::Codex.is_env_global());
+        assert!(Runtime::Glm.is_env_global());
+        assert!(Runtime::Kimi.is_env_global());
+        assert!(Runtime::Deepseek.is_env_global());
+        assert!(Runtime::Qwen.is_env_global());
+    }
+
+    #[test]
+    fn env_backend_and_session_backend_as_runtime_are_inverses() {
+        for r in [
+            Runtime::Glm,
+            Runtime::Kimi,
+            Runtime::Deepseek,
+            Runtime::Qwen,
+        ] {
+            let backend = r
+                .env_backend()
+                .expect("env-global runtime must map to a backend");
+            assert_eq!(backend.as_runtime(), Some(r));
+        }
+        assert_eq!(Runtime::Claude.env_backend(), None);
+        assert_eq!(Runtime::Codex.env_backend(), None);
+        assert_eq!(SessionBackend::Claude.as_runtime(), None);
+    }
+
+    #[test]
+    fn env_auth_var_is_not_uniform_deepseek_differs_from_the_other_three() {
+        // Pins the lead-confirmed correction (DeepSeek docs: api-docs.deepseek.com) that
+        // DeepSeek's Anthropic-compat endpoint reads `ANTHROPIC_API_KEY`, not the
+        // `ANTHROPIC_AUTH_TOKEN` the other three env-global runtimes use — a transition
+        // instruction naming the wrong var would actively mislead, so this is locked down.
+        assert_eq!(env_auth_var(Runtime::Deepseek), "ANTHROPIC_API_KEY");
+        for r in [Runtime::Glm, Runtime::Kimi, Runtime::Qwen] {
+            assert_eq!(env_auth_var(r), "ANTHROPIC_AUTH_TOKEN");
+        }
+    }
+
+    #[test]
+    fn transition_resolutions_deepseek_names_the_correct_auth_var() {
+        let resolutions = transition_resolutions(Runtime::Deepseek);
+        assert!(resolutions[2].contains("ANTHROPIC_API_KEY"));
+        assert!(!resolutions[2].contains("ANTHROPIC_AUTH_TOKEN"));
+    }
+
+    #[test]
+    fn env_endpoint_hint_qwen_presents_both_shapes_not_one_as_fact() {
+        // Must not silently commit to a single Qwen URL — both attested shapes are surfaced
+        // (see `SessionBackend::detect_from_base_url`'s doc comment on the same discrepancy).
+        let hint = env_endpoint_hint(Runtime::Qwen);
+        assert!(hint.contains("dashscope"));
+        assert!(hint.contains("maas.aliyuncs.com"));
     }
 
     // ── backup_corrupt ────────────────────────────────────────────────────────

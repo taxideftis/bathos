@@ -15,6 +15,9 @@
 //! - **runtime host detection** (`runtime_host`, ADR-CX-01): pure env classification of which
 //!   CLI host runtime (`claude`|`codex`|`unknown`) the current process is running under — never
 //!   persisted, orthogonal to `model_plan::SessionBackend`
+//! - **wave↔role roster** (`wave_roles`): static `CLAUDE.md` §1/§2 role↔wave table (moved here
+//!   from a `bathos-cli`-private function so `model_plan`'s wave-aware resolve/validate and the
+//!   CLI share one definition instead of two)
 //!
 //! ## Usage example
 //! ```rust,no_run
@@ -46,6 +49,7 @@ pub mod model_plan;
 pub mod runtime_host;
 pub mod schema;
 pub mod store;
+pub mod wave_roles;
 
 // re-export the most frequently used types
 pub use error::{StateError, StateResult};
