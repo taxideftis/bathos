@@ -73,6 +73,17 @@ fi
 CHECKED=0
 for f in "${TARGETS[@]}"; do
   rel="${f#"$BATHOS_ROOT"/}"
+
+  # 폐지(deprecated) 매니페스트는 버전 핀 검사에서 제외한다 — #35 에서
+  # dist/tests/test-manifests.sh 에 넣은 것과 같은 관례. 스스로
+  # `"deprecated": true` 를 선언하고 후속 정본을 가리키며 삭제 계획(`_removal`)까지
+  # 적어 둔 스켈레톤에 버전 핀을 요구하면 오탐이 된다.
+  # 암묵 제외 금지 — 건너뛴 사실을 로그로 남긴다(조용히 통과시키지 않음).
+  if command -v jq >/dev/null 2>&1 && [[ "$(jq -r '.deprecated // false' "$f" 2>/dev/null)" == "true" ]]; then
+    info "$rel — deprecated=true → 버전 핀 검사 제외(정본으로 대체된 스켈레톤). 파일 삭제는 해당 매니페스트의 _removal 계획을 따른다"
+    continue
+  fi
+
   v="$(extract_version "$f")"
   CHECKED=$((CHECKED + 1))
   if [[ -z "$v" ]]; then
