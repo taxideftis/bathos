@@ -1,0 +1,20 @@
+{
+  "name": "bathos-marketplace",
+  "interface": {
+    "displayName": "BATHOS"
+  },
+  "plugins": [
+    {
+      "name": "bathos",
+      "source": {
+        "source": "local",
+        "path": "./dist/codex-plugin"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

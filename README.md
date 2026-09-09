@@ -57,6 +57,7 @@ BATHOS turns a **single Claude Code session into a disciplined product team** �
 | **Custom module authoring** | [`docs/MODULE-GUIDE-en.md`](docs/MODULE-GUIDE-en.md) | [`docs/MODULE-GUIDE-kr.md`](docs/MODULE-GUIDE-kr.md) | [`docs/MODULE-GUIDE-es.md`](docs/MODULE-GUIDE-es.md) | Write your own plugin (module.yaml, trigger DSL, W4) without touching the core |
 | **Role customization** | [`docs/ROLE-GUIDE-en.md`](docs/ROLE-GUIDE-en.md) | [`docs/ROLE-GUIDE-kr.md`](docs/ROLE-GUIDE-kr.md) | [`docs/ROLE-GUIDE-es.md`](docs/ROLE-GUIDE-es.md) | Adapt the 17 roles via the 3-layer override (base → team → user) |
 | **Architecture** (contributors) | [`docs/ARCHITECTURE-en.md`](docs/ARCHITECTURE-en.md) | [`docs/ARCHITECTURE-kr.md`](docs/ARCHITECTURE-kr.md) | [`docs/ARCHITECTURE-es.md`](docs/ARCHITECTURE-es.md) | Crate map, invariants (A9, gate, audit), exit/error codes, contributing |
+| **Codex CLI portability** | *(planned)* | [`docs/codex-adapter-kr.md`](docs/codex-adapter-kr.md) · [`docs/PORTABILITY-kr.md`](docs/PORTABILITY-kr.md) | *(planned)* | Codex skills, hooks, subagents, plugin bundle, runtime detection, and known live-verification gaps |
 | **FAQ** | [`docs/FAQ-en.md`](docs/FAQ-en.md) | [`docs/FAQ-kr.md`](docs/FAQ-kr.md) | [`docs/FAQ-es.md`](docs/FAQ-es.md) | Common questions & troubleshooting |
 | **Operating rules / principles** | [`CLAUDE.md`](CLAUDE.md) · [`ETHOS.md`](ETHOS.md) | | | Team operating rules and the gstack-derived ETHOS |
 
@@ -224,6 +225,20 @@ Mainline dependency: **W0 → W1 → W2 → W3 → W5 → W6**. W4 (IP & researc
 | `/team-confirm` | (post) | lead only | — |
 
 **Why W3 is the heart.** Wave 3 closes the design→build context gap: role #17 **Matthew** condenses the upstream work into a **self-contained dev story file** (9 sections, every technical claim tagged `[Source: …]`), Thomas & Matthias review it independently, and if the verdict is `FAIL` the `gate-enforce` hook **physically blocks** entry into W5.
+
+**How W5 builds — the implementation discipline.** Wave 5 runs under an explicit **ladder** that decides *what* gets built. Before writing code, the implementer stops at the first rung that holds: ① does this need to exist at all → ② is it already in this codebase → ③ does the standard library do it → ④ does a native platform feature cover it → ⑤ does an already-installed dependency solve it → ⑥ can it be one line → ⑦ only then, the minimum code that works.
+
+The ladder governs **scope**; ETHOS *Boil the Ocean* governs **completeness** of the scope you settled on. The two axes never cut each other — input validation, error handling, security, accessibility and the one runnable check behind non-trivial logic are explicitly out of the ladder's reach.
+
+A simplification that cuts a real corner carries a marker naming its ceiling and its way out:
+
+```rust
+// ponytail: single global lock, split into per-wave locks if profiling shows contention
+```
+
+`/bathos-debt` harvests those `ponytail:` markers from source alongside `CONCERNS:` anchors in documents, and flags any marker with no upgrade trigger as `no-trigger` — so "later" cannot quietly become "never". Strength is a per-session toggle: `/bathos intensity <lite|full|ultra|off>` (default `full`).
+
+Rules: [`.claude/agents/_preamble/ponytail-inject-kr.md`](.claude/agents/_preamble/ponytail-inject-kr.md) — canonical (KR), with `-en` / `-ja` / `-es` editions alongside.
 
 ---
 
@@ -411,6 +426,11 @@ Team artifacts a run produces live under `.agent-team/` (plan, discovery, archit
 
 - It is a **method package that runs on Claude Code**, not a standalone app, and depends on the **experimental Agent Teams** feature.
 - The engine is verified: **510 Rust tests + 86 hook determinism checks, all green**; `cargo clippy -D warnings` clean; release builds reproducibly.
+- Codex CLI support is in active porting: the repo now emits Codex skills, subagents,
+  project hooks, a plugin bundle, runtime detection, and adapter drift diagnostics. The
+  remaining release-readiness gap is authenticated live verification (`story-20`),
+  including hook wiring, skill invocation, plugin activation, and current `SessionEnd`
+  behavior.
 - It is **not yet production-hardened**; APIs, schemas, and command names may change before 1.0.
 - Some wave commands are **orchestration prompts** the lead runs in Claude Code (they spawn/review teammates), not fully autonomous engine flows.
 
@@ -473,6 +493,8 @@ THE SOFTWARE.
 We name this lineage by choice, not obligation. A system whose central tenet is that *generation must remain answerable to verification* would contradict itself by obscuring the prior art it stands on. BATHOS therefore records its debt to BMAD-METHOD plainly and with genuine respect — it charted the terrain that BATHOS set out to deepen. In accordance with the MIT License, BMAD-METHOD’s copyright and license notice are preserved in [`LICENSE`](LICENSE); the full acknowledgment lives in [`CREDITS.md`](CREDITS.md).
 
 BATHOS is a separate, independently implemented project and does **not** use the trademarks “BMAD”, “BMad Method”, “BMad Builder”, “BMB”, “TEA”, “CIS”, “GDS”, or “WDS” in its product name or marketing.
+
+**Implementation discipline (Wave 5).** The W5 ladder adapts engineering principles from **[ponytail](https://github.com/DietrichGebert/ponytail)** (MIT) — the YAGNI-first rung ladder, the “when not to be lazy” boundaries, and the deferred-simplification marker convention. BATHOS absorbs the *principles only*: the persona, tone, and branding are deliberately not adopted, and the rules were rewritten for the wave/role context with an explicit precedence rule against ETHOS *Boil the Ocean*. Our reverse analysis and the scope decision are recorded in [`_recon/ponytail-analysis.md`](_recon/ponytail-analysis.md).
 
 ---
 

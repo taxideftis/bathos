@@ -1,0 +1,56 @@
+# scripts/codex-glm/relay-config.toml.example
+#
+# Example Codex CLI config snippet for routing through codex-relay (MetaFARS/codex-relay,
+# https://github.com/MetaFARS/codex-relay) to GLM (Zhipu). codex-relay is Codex's #1
+# recommended bridge for GLM per story-21 (translates Responses API <-> Chat Completions,
+# and auto-injects `thinking: {"type": "enabled"}` for GLM so reasoning is not suppressed
+# under Codex's system prompt).
+#
+# THIS FILE IS AN EXAMPLE ONLY — no live integration was attempted or verified in this
+# repo (story-21 scope: "example config + verification script", not a working connection.
+# See ux-parity-limits.md#l5 for the honest L5 gap this only partially closes).
+#
+# Three facts this file exists to make undeniable (AC#2):
+#   1. A local proxy (codex-relay) is REQUIRED — Codex speaks the Responses API only and
+#      GLM speaks Chat Completions; there is no direct env-var swap like the Claude Code
+#      GLM path (scripts/glm-env.sh).
+#   2. Live GLM-through-Codex connectivity is UNVERIFIED from this repo/session. The
+#      `8ee6dd7` GLM live verification in this codebase is the Claude Code backend path
+#      (scripts/glm-env.sh) — it does NOT cover this Codex+relay path. Do not conflate them.
+#   3. This is an OPTIONAL/selected feature (P6) — nothing in the Codex portability scope
+#      (S1-S7) depends on this file existing or working.
+#
+# --- Where this goes -------------------------------------------------------------------
+# codex-relay's own docs register upstream providers via `[model_providers.<name>]`, which
+# per Codex's config schema is a USER-LEVEL setting (~/.codex/config.toml) — project-scoped
+# config (.codex/hooks.json, .codex/agents/*.toml) does NOT carry model_providers entries.
+# Copy the relevant block below into your OWN `~/.codex/config.toml` by hand; nothing in
+# BATHOS writes to that file automatically (see verify-relay.sh header for why).
+
+# 1) Start the relay pointed at Zhipu's GLM coding endpoint (run this yourself, in a
+#    separate terminal or process manager — BATHOS does not manage this process):
+#
+#      CODEX_RELAY_UPSTREAM=https://open.bigmodel.cn/api/coding/paas/v4 \
+#      CODEX_RELAY_API_KEY=$GLM_API_KEY \
+#      CODEX_RELAY_PORT=4453 \
+#      codex-relay
+#
+# 2) Add this to ~/.codex/config.toml so Codex routes model calls through the local relay:
+
+model = "glm-4.6"
+model_provider = "glm-relay"
+
+[model_providers.glm-relay]
+name = "GLM (via codex-relay)"
+base_url = "http://127.0.0.1:4453/v1"
+wire_api = "responses"
+env_key = "GLM_API_KEY"
+
+# model_properties is optional but recommended by codex-relay's own README to avoid the
+# "Model metadata ... not found" fallback-metadata warning. Values below are placeholders —
+# run `codex-relay --print-config --upstream https://open.bigmodel.cn/api/coding/paas/v4
+# --api-key $GLM_API_KEY` yourself to get relay-generated, upstream-sourced values instead
+# of these guesses (this repo does not fabricate measured context-window numbers).
+# [model_properties."glm-4.6"]
+# context_window = <run --print-config to fill in — not measured here>
+# supports_parallel_tool_calls = true
