@@ -46,10 +46,21 @@ mkdir -p "$DST/.codex-plugin" "$DST/skills" "$DST/hooks"
 # 확인됨 — adapter-contracts.md §9 manifest_schema의 optional 필드(skills/hooks)를
 # 명시 포인터로 채운다(레퍼런스: Codex 내장 visualize 플러그인의 "skills": "./skills/").
 # ---------------------------------------------------------------------------
-cat > "$DST/.codex-plugin/plugin.json" <<'JSONEOF'
+# version 은 dist/VERSION(축 B 배포 레이어의 단일 버전 핀)에서 읽는다.
+# 이전에는 여기에 "0.1.0" 이 하드코딩돼 있어, dist/VERSION 이 0.2.0 으로 올라간 뒤에도
+# 빌드마다 낡은 값을 다시 써 넣었다 — check-versions.sh 가 이를 잡아내지만 그 검사가
+# drift-guard 안에 있었고 워크플로가 파싱 오류로 죽어 있어(#32) 드리프트가 가려졌다(#33).
+# JSON 만 손으로 고치면 다음 빌드에서 되돌아가므로 생성기 쪽을 고친다(근본 원인).
+_PLUGIN_VERSION="$(tr -d '[:space:]' < "$PROJ/dist/VERSION" 2>/dev/null || true)"
+if [[ -z "$_PLUGIN_VERSION" ]]; then
+  printf '[build-codex-plugin] ✗ dist/VERSION 을 읽을 수 없습니다 — 버전 핀 없이 번들을 만들지 않습니다.\n' >&2
+  exit 1
+fi
+
+cat > "$DST/.codex-plugin/plugin.json" <<JSONEOF
 {
   "name": "bathos",
-  "version": "0.1.0",
+  "version": "$_PLUGIN_VERSION",
   "description": "BATHOS — 17역할 7웨이브 AI Workflow Agent 메서드 패키지 (Codex CLI 네이티브 플러그인: skills + hooks)",
   "author": {
     "name": "BATHOS project"
