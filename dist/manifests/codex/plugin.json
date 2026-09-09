@@ -1,14 +1,6 @@
 {
   "name": "bathos-dynamis",
-  "description": "BATHOS Dynamis — Codex 어댑터 매니페스트 스켈레톤 (미타깃 · Could · 설계 지도 전용)",
-  "version": "0.2.0",
-  "author": "BATHOS project",
-  "_skeleton_note": "Could — 미타깃(LD-2). 실제 Codex 플러그인 매니페스트 스키마는 검증되지 않음(추정). 필드명·경로는 docs/agent-portability-kr.md §2의 표에 맞춘 설계 지도이며, 실제 Codex 구동 여부는 미검증. instruction 파일 경로(AGENTS.md)도 (추정).",
-  "sources": {
-    "roles": "../../../.claude/agents",
-    "skills": "../../../.claude/skills",
-    "commands": "../../../.claude/commands",
-    "hooks": "../../../.claude/hooks"
-  },
-  "capability_tier": "full-hook"
+  "deprecated": true,
+  "_note": "이 스켈레톤은 실스키마 불일치로 폐기 예정(W2 판정: codex-mechanisms.md §4.3). 정본: dist/codex-plugin/.codex-plugin/plugin.json",
+  "_removal": "W6 문서 정합(SS20)에서 참조 소거 확인 후 파일 삭제"
 }

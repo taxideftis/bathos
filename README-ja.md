@@ -229,7 +229,7 @@ BATHOS はタスクが実際に必要とするウェーブだけを起動しま�
 
 | コマンド | サブコマンド | 目的 |
 |---|---|---|
-| `state` | `validate`, `show` | 単一の真実の源 — `manifest.json` のスキーマ検証と検査 |
+| `state` | `init`, `validate`, `show` | 信頼できる唯一の情報源 `manifest.json` の作成・検証・表示 |
 | `route` | `decide`, `show` | スケール適応型レベルの推奨（stdin/`--stakes-json`; `--confirm <0-4>` で記録） |
 | `wave` | `init`, `activate`, `show` | 7 ウェーブの状態遷移（並列度 ≤ 3 を強制） |
 | `gate` | `verdict`, `show` | ゲート判定の記録 / 読み取り（PASS/CONCERNS/FAIL; FAIL → 終了 2） |
@@ -239,6 +239,7 @@ BATHOS はタスクが実際に必要とするウェーブだけを起動しま�
 | `doctor` | — | **インストール/配線のプリフライト** — `BATHOS_BIN`、`jq`、Agent Teams フラグ、`settings.json` の hooks ブロック（コメントキーによるハング）、フックの実行ビット、manifest スキーマ、監査チェーン |
 
 ```bash
+bathos -s _state state init --codename MYPROJECT       # スキーマ準拠の manifest seed を作成
 bathos -s _state state validate                       # validate manifest.json
 bathos -s _state gate verdict Implementation PASS Matthew
 bathos -s _state gate show                            # latest Implementation gate (JSON)

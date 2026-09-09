@@ -2,13 +2,13 @@
 
 > **성격: 런타임 포팅.** Claude Code 접착층(Agent Teams·훅·커맨드)을 OpenAI Codex CLI의 확장점으로 옮긴다. `bathos` 엔진은 그대로 CLI로 호출.
 > 상위 판단·단계 계획: `docs/PORTABILITY-kr.md`. 이 문서는 Codex 매핑 상세 + 재설계 지점 + 변환 스캐폴드(`scripts/to-codex.sh`) 사용법.
-> **P5 갱신(2026-07-16, Phillip)**: Codex CLI **v0.144.5**(macos-x86_64)를 실제
-> 설치해 훅 스키마를 실측했다. **hooks 기능 = stable(실험적 아님)·기본 활성**
-> (`codex features list`에서 `hooks  stable  true` 확인), tool_name 실측값은
-> `shell`/`exec_command`/`apply_patch`(`Bash`는 존재하지 않음), `SessionEnd`
-> 이벤트는 없음(확정)·`Stop`은 유효 이벤트임을 확인했다. 아래 §1~§3은 이
-> 실측을 반영해 갱신됐다(과거 "실험적/문서 예시 기준" 표기는 실측으로 대체).
-> 커스텀 프롬프트는 deprecated(→skills) — 이 항목은 여전히 미실측 추정.
+> **W5 갱신(2026-07-23~31)**: 타겟 기준선은 Codex CLI **v0.145.0+**로 이동했다.
+> 저장소는 prompts 중심 스캐폴드가 아니라 **skills + project hooks + subagents +
+> plugin bundle** 경로를 정본으로 방출한다. v0.145.0 로컬에서 `hooks stable true`
+> 는 확인했지만, 인증된 Codex 세션의 end-to-end hook 발화와 plugin/skill/subagent
+> 동작은 `story-20` live walkthrough로 남아 있다. 또한 2026-07-31 현재 공식 Hooks
+> 문서가 `SessionEnd`를 노출하므로, 과거 v0.144.5 기준의 "SessionEnd 부재" 단정은
+> **문서 드리프트 후보**로 보고 `probe.sh`로 재실측해야 한다.
 
 ---
 
@@ -16,14 +16,17 @@
 
 | BATHOS(Claude Code) | Codex CLI 대응 | 변환 |
 |---------------------|----------------|------|
-| `.claude/agents/<r>.md` (frontmatter `model`) | `~/.codex/agents/<r>.toml` (`name`·`description`·`developer_instructions`·`model`·`model_reasoning_effort`) | `to-codex.sh`가 기계 변환 |
-| `.claude/commands/<c>.md` | `~/.codex/prompts/<c>.md` (`/prompts:<c>`, `$1..$9`·`$ARGUMENTS`·front matter) | `to-codex.sh`가 기계 변환 |
+| `.claude/agents/<r>.md` (frontmatter `model`) | `.codex/agents/<r>.toml` (`name`·`description`·`developer_instructions`·`model`·`model_reasoning_effort`) | `to-codex.sh` + 모델 매핑 |
+| `.claude/commands/<c>.md` | `.agents/skills/<c>/SKILL.md` (`$<c>` explicit/implicit skills) | generated + hand-authored Codex-native skills |
+| `.claude/commands/<c>.md` | `.codex-out/prompts/<c>.md` / 선택적 `~/.codex/prompts/<c>.md` | legacy deterministic fallback only |
 | `AGENTS.md` | 네이티브(Codex가 읽음) | 그대로 |
 | MCP 서버 | `~/.codex/config.toml` `[mcp_servers.x]` | 수동/후속 |
-| 훅(settings.json) | `~/.codex/config.toml` `[hooks]`(v0.144.5 실측: stable·기본 활성) | §3 재설계 |
+| 훅(settings.json) | `.codex/hooks.json` project hooks + 보조 `config.toml.example` | §3 재설계 |
 | 모델 ID `claude-*` | Codex `model` + `[model_providers.x]` | §4 |
 
-**중첩 규칙 부합:** Codex `agents.max_depth` 기본 1 = "루트만 서브에이전트 스폰, 팀원은 중첩 팀 금지" → BATHOS 규칙과 일치(추가 조치 불필요).
+**중첩 규칙:** `max_depth`류 물리 차단은 현재 정본으로 삼지 않는다. AGENTS.md와
+각 TOML `developer_instructions`에 "서브에이전트는 다시 스폰하지 않는다"를 중복
+명기하고, SubagentStart 로그로 사후 검증한다.
 
 ---
 
@@ -31,12 +34,17 @@
 
 ```bash
 bash scripts/to-codex.sh            # 미리보기(dry-run): 무엇이 생성될지 출력만
-bash scripts/to-codex.sh --write    # 실제 생성: ~/.codex/prompts/ 와 프로젝트 .codex/agents/ 에 기록
+bash scripts/to-codex.sh --write    # 실제 생성: .agents/skills/** 와 .codex/agents/**, .codex-out/**
 bash scripts/to-codex.sh --write --dest /경로   # 출력 위치 지정
 ```
-- 커맨드: `.claude/commands/*.md` → prompts. front matter(`description`/`argument-hint`)는 Codex도 인식하므로 대체로 그대로. `$ARGUMENTS`/`$1..$9` 규약 동일.
-- 에이전트: `.claude/agents/_base/*.md`의 frontmatter(`name`/`description`/`model`)를 파싱 → `.toml`로 방출. 본문(역할 지침)은 `developer_instructions`에 삽입.
-- ⚠️ **자동 변환이 못 하는 것**(수동): 훅 기반 게이트(§3), SessionEnd 종료 루틴(§3), MCP 등록(§1), 모델 프로바이더(§4), 커맨드가 Task/Agent 툴로 팀을 스폰하는 로직(Codex 서브에이전트 호출로 재작성).
+- 커맨드: generated skills와 hand-authored Codex-native skills로 나눈다. 팀 스폰형
+  커맨드는 자동 변환하지 않고 스폰 순서·디스크 SSOT·중첩 금지 규칙을 수기 명시한다.
+- 에이전트: `.claude/agents/_base/*.md` frontmatter/body를 읽어 `.codex/agents/*.toml`
+  로 방출한다. `spawnable:false`인 Paul은 제외한다.
+- prompts: `.codex-out/prompts/**`는 legacy scaffold이고, `--emit-prompts`를 명시할
+  때만 홈의 `~/.codex/prompts`에도 과도기 폴백을 쓴다.
+- ⚠️ **자동 변환이 못 하는 것**(수동): live hook trust, plugin marketplace E2E,
+  인증 세션에서의 `agent_type`/model override 동작, `SessionEnd` 실제 발화 여부.
 
 ---
 
@@ -52,14 +60,14 @@ BATHOS는 W3 등 핵심 게이트를 "태스크 완료 차단"(TaskCompleted 훅
   `codex-adapter/hooks/pretooluse-gate.sh`에서 수정 완료 — 상세는
   `codex-adapter/README.md` §정직한 한계).
 
-### (b) `SessionEnd` 없음 → `Stop` 근사
-CLAUDE.md §9(종료 시 저장→리포트→종료 강제)는 Codex에 SessionEnd가 없어 물리적으로 동일 구현 불가.
+### (b) 종료 저장: `Stop` 근사 + `SessionEnd` 재실측 필요
+CLAUDE.md §9(종료 시 저장→리포트→종료 강제)는 v0.144.5 실측 당시 Codex에
+`SessionEnd`가 없어 물리적으로 동일 구현 불가라고 판단했다. 그러나 2026-07-31
+현재 공식 Hooks 문서가 `SessionEnd`를 노출하므로, 이 전제는 W6에서 재실측해야 한다.
 - **대안:** `Stop`(턴 종료) 훅에서 스냅샷/리포트를 **증분 저장**(세션 종료 ≠ 턴 종료이므로 매 턴 갱신 방식). 완전한 "종료 시 1회"는 포기하고 "자주 저장"으로 대체. `/save-session` 수동 저장 병행 권장.
-- **실측 확정(P5)**: Codex v0.144.5의 `HookEventNameWire` 상수를 직접 확인한
-  결과 유효 이벤트는 PreToolUse·PostToolUse·PermissionRequest·PreCompact·
-  PostCompact·SessionStart·SubagentStart·SubagentStop·**Stop**·
-  UserPromptSubmit이다. **`SessionEnd`는 이 목록에 없다(확정)** — 즉 위
-  "Stop 근사"는 추정이 아니라 유일하게 가능한 정답임이 실측으로 검증됐다.
+- **현재 방침:** 구현은 `Stop` + `SessionStart`를 유지한다. `SessionEnd`가 실제로
+  발화하는지 `probe.sh`/인증 세션으로 확인한 뒤, 종료 리포트 자동화를 이번 릴리스에
+  넣을지 다음 스코프로 둘지 사용자에게 묻는다(User Sovereignty).
 
 ### (c) 훅 stable·Windows 공백
 - **실측 정정(P5)**: Codex 훅은 더 이상 실험적이 아니다 — `codex features
@@ -99,6 +107,11 @@ CLAUDE.md §9(종료 시 저장→리포트→종료 강제)는 Codex에 Session
   세션(auth 부재로 미실행) — 스키마·계약까지만 실측했고, 실제 인증 세션에서
   config 등록이 배선대로 동작하는지는 다음 실사용 시 확인 필요. 또한 이
   해소는 **v0.144.5 버전 고정**이므로 업그레이드 시 재확인 필요.
+- **W5: 구현 완료(2026-07-23, story-20 제외)** — 타겟을 **v0.145.0+**로 이동하고,
+  `.agents/skills/**`, `.codex/agents/*.toml`, `.codex/hooks.json`,
+  `dist/codex-plugin/**`, `bathos runtime`, `probe.sh`, Codex careful/freeze,
+  SessionStart 안내, drift check, run-role CI를 추가했다. 로컬 하네스 기준 구현은
+  닫혔지만, 인증 Codex 세션에서의 E2E(`story-20`)는 W6 검증 항목이다.
 - **P5.1: 완료(2026-07-17)** — 라이브 인증 Codex 세션에서 실제
   `apply_patch` PreToolUse 입력을 확인한 결과, 패치는 `tool_input.command`에
   실리고 대상 파일은 **절대경로**(`/Users/…/project/src/…`)로 온다. 옛

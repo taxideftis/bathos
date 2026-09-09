@@ -24,3 +24,6 @@ serde_json          = { workspace = true }
 anyhow              = { workspace = true }
 chrono              = { workspace = true }
 crossterm           = "0.29"
+
+[dev-dependencies]
+tempfile = { workspace = true }

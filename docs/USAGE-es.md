@@ -212,9 +212,15 @@ Opciones globales (comunes a todos los subcomandos):
 
 ### 6.1 `bathos state` — SSOT de estado (B1)
 ```bash
+bathos --state-dir .agent-team/_state state init \
+       --codename MYPROJECT                            # crea un manifest.json seed válido según el esquema
 bathos --state-dir .agent-team/_state state validate   # validación JSON Schema de manifest.json (VALID/lista de violaciones)
 bathos --state-dir .agent-team/_state state show        # imprime el JSON del estado actual
 ```
+
+`state init` crea el estado mínimo válido con `level=0`, `lang=ko` y un
+`project_id=bathos-<uuid>` automático. No reemplaza un manifest existente
+sin `--force`. `/team-kickoff` lo invoca durante el uso normal.
 
 ### 6.2 `bathos gate` — veredictos de gate (B3)
 ```bash

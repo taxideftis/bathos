@@ -1,0 +1,60 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|shell|exec_command|apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash \"codex-adapter/hooks/pretooluse-gate.sh\"",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "^(Bash|shell|exec_command|apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash \"codex-adapter/hooks/careful-guard-codex.sh\"",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "^(Bash|shell|exec_command|apply_patch|Edit|Write)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash \"codex-adapter/hooks/freeze-guard-codex.sh\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash \"codex-adapter/hooks/stop-save.sh\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash \"codex-adapter/hooks/session-start.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -5,6 +5,7 @@
 //!
 //! ## Subcommand structure
 //! ```text
+//! bathos state init       # Create a schema-valid manifest.json seed
 //! bathos state validate   # Validate manifest.json schema (B1)
 //! bathos state show       # Print current manifest.json state (B1)
 //! bathos gate verdict     # Record gate verdict (B3 implementation)
@@ -20,6 +21,7 @@
 //! bathos plug enable <id> # Enable a module (B4)
 //! bathos plug disable <id># Disable a module (B4)
 //! bathos audit append     # Append an audit log entry (B-1 fix: single Rust writer)
+//! bathos runtime          # Report claude|codex|unknown CLI host runtime (SS13, CT-ENGINE-5)
 //! ```
 //!
 //! ## Exit code convention (hook integration)
@@ -37,8 +39,9 @@ use anyhow::{Context, Result};
 use bathos_gate_engine::{GateEngine, GateIssue, VerdictAggregator};
 use bathos_plug::{ModuleRegistry, PlugManager};
 use bathos_state::{
-    model::GateType,
+    model::{GateType, Project},
     model_plan::{self, ModelPlan, Runtime, SessionBackend},
+    runtime_host,
     schema::validate_manifest,
     store::StateStore,
     Verdict,
@@ -175,6 +178,16 @@ enum Commands {
         #[arg(long, default_value_t = 2)]
         interval: u64,
     },
+    /// 현재 CLI 호스트 런타임(claude|codex|unknown)을 보고한다(SS13, CT-ENGINE-5, ADR-CX-01).
+    ///
+    /// 순수 env 분류(`runtime_host::detect`) — 훅/플러그인 실행 컨텍스트 밖(맨 셸)에서는
+    /// unknown이 정답이다(버그 아님). **리포트 전용 — 게이트가 아니다**: exit은 unknown
+    /// 포함 항상 0(엔진 exit 규약의 2=게이트 FAIL 전용 의미를 이 커맨드에 부여하지 않는다).
+    Runtime {
+        /// 단일행 compact JSON으로 출력({"schema":"bathos/runtime-detect@1","host":...}).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -213,6 +226,27 @@ enum StateAction {
     Validate,
     /// manifest.json의 현재 상태를 JSON으로 출력한다.
     Show,
+    /// 스키마 유효 manifest.json seed를 생성한다 (kickoff 부트스트랩).
+    ///
+    /// `Project::new` + `StateStore::create`(쓰기 전 스키마 검증)로 항상 유효한 seed를 만든다.
+    /// 기존 manifest가 있으면 `--force` 없이는 덮어쓰지 않는다.
+    Init {
+        /// 제품 코드명 (codename, 예: BATHOS).
+        #[arg(long)]
+        codename: String,
+        /// Scale-Adaptive 레벨 (0~4). 미지정 시 0 (잠정 — /route에서 확정).
+        #[arg(long, default_value_t = 0)]
+        level: u8,
+        /// 주 언어 코드 (기본 ko).
+        #[arg(long, default_value = "ko")]
+        lang: String,
+        /// 프로젝트 ID (미지정 시 bathos-<uuid> 자동생성; 지정 시 'bathos-' 접두 필수).
+        #[arg(long)]
+        project_id: Option<String>,
+        /// 기존 manifest.json을 덮어쓴다.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 // ── gate subcommands (B3 implementation) ─────────────────────────────────────
@@ -409,7 +443,7 @@ fn wave_role_slugs(wave_id: &str) -> Option<&'static [&'static str]> {
             "thomas-code-reviewer",
             "timothy-doc-specialist",
             "matthias-qa-validator",
-            "mishael-security-specialist",
+            "michael-security-specialist",
             "hananiah-refactoring-specialist",
             "martin-monitoring-reporter",
         ]),
@@ -522,7 +556,47 @@ fn run(cli: Cli) -> Result<i32> {
             wave,
             interval,
         } => Ok(handle_panes(mode, path, wave, interval)),
+        Commands::Runtime { json } => Ok(handle_runtime(json)),
     }
+}
+
+/// `bathos runtime [--json]` (SS13, CT-ENGINE-5) — reports (never gates) which CLI host runtime
+/// this process is executing under. Always returns exit 0, including `unknown`: this is a
+/// report, not a gate (the engine's exit-2 convention stays reserved for gate FAIL only — see
+/// the module doc comment's exit-code table).
+fn handle_runtime(json: bool) -> i32 {
+    // W-RUNTIME-FORCE-INVALID (exceptions.md §4): `runtime_host::detect` itself stays pure (no
+    // I/O, so it's the unit-testable env-closure function story-12 §2.2 specifies) and silently
+    // falls through past an invalid override rather than warning — so the one-line stderr
+    // warning belongs at this CLI layer. This re-checks the same three valid values `detect`
+    // checks internally; duplicating that one match arm here is cheaper than threading a warning
+    // field through `HostDetection` just to carry it out of a function that's supposed to have
+    // no side effects.
+    if let Ok(v) = std::env::var("BATHOS_FORCE_HOST") {
+        if !matches!(v.as_str(), "claude" | "codex" | "unknown") {
+            eprintln!(
+                "[bathos runtime] ⚠ BATHOS_FORCE_HOST='{}' 무효(claude|codex|unknown만 허용) — 무시하고 실감지 진행",
+                v
+            );
+        }
+    }
+
+    let detection = runtime_host::detect(&|k| std::env::var(k).ok());
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "bathos/runtime-detect@1",
+                "host": detection.host.as_str(),
+                "source": detection.source,
+                "evidence": detection.evidence,
+            })
+        );
+    } else {
+        println!("{}", detection.host.as_str());
+    }
+    0
 }
 
 /// `bathos inspect <sub>` delegation — forwards to the single `bathos-inspect` (read-only crate).
@@ -772,6 +846,64 @@ fn handle_state(action: StateAction, state_dir: &Path) -> Result<i32> {
             let json = serde_json::to_string_pretty(project).context("프로젝트 직렬화 실패")?;
 
             println!("{}", json);
+            Ok(0)
+        }
+
+        StateAction::Init {
+            codename,
+            level,
+            lang,
+            project_id,
+            force,
+        } => {
+            // Schema-valid manifest seed for kickoff bootstrap.
+            // Rationale: the engine previously had no create/init command, so the very
+            // first manifest.json was hand-authored by an LLM against a strict schema —
+            // unreliable across runtimes (Codex-run kickoff produced an invalid
+            // manifest). This stamps a guaranteed-valid seed.
+            let manifest_path = state_dir.join("manifest.json");
+            if manifest_path.exists() && !force {
+                eprintln!(
+                    "[E-STATE-EXISTS] manifest.json이 이미 존재합니다: {}",
+                    manifest_path.display()
+                );
+                eprintln!("[bathos state init] 덮어쓰려면 --force 를 지정하세요.");
+                return Ok(1);
+            }
+            if level > 4 {
+                eprintln!("[E-ARG] --level 은 0~4 여야 합니다 (받음: {level}).");
+                return Ok(1);
+            }
+            if codename.is_empty() {
+                eprintln!("[E-ARG] --codename 은 비어 있을 수 없습니다.");
+                return Ok(1);
+            }
+            if lang.chars().count() < 2 {
+                eprintln!("[E-ARG] --lang 은 두 글자 이상이어야 합니다 (받음: {lang}).");
+                return Ok(1);
+            }
+            // Project::new fills the schema-required defaults (project_id=bathos-<uuid>,
+            // status=Active, created=now(RFC3339), empty relation vecs).
+            let mut project = Project::new(codename, level);
+            project.lang = lang;
+            if let Some(pid) = project_id {
+                if pid.strip_prefix("bathos-").is_none_or(str::is_empty) {
+                    eprintln!(
+                        "[E-ARG] --project-id 는 'bathos-' 뒤에 식별자가 있어야 합니다 (받음: {pid})."
+                    );
+                    return Ok(1);
+                }
+                project.project_id = pid;
+            }
+            let project_id = project.project_id.clone();
+            // StateStore::create validates the manifest against the JSON Schema before
+            // the atomic write, so a successful return guarantees a valid seed.
+            StateStore::create(state_dir, project)
+                .with_context(|| format!("state seed 생성 실패: {}", state_dir.display()))?;
+            println!(
+                "[bathos state init] ✓ manifest.json 생성: {} (project_id={project_id}, level={level})",
+                manifest_path.display()
+            );
             Ok(0)
         }
     }
@@ -1898,6 +2030,11 @@ fn handle_doctor(root: &Path, state_dir: &Path, modules_dir: &Path) -> Result<i3
         println!("· 감사 로그 없음(아직 활동 전 — 정상)");
     }
 
+    // 9. Codex sub-checks (SS13, runtime-abstraction-design.md §7 — additive: new helper + 1 call)
+    let (codex_errors, codex_warns) = doctor_codex_section(root);
+    errors += codex_errors;
+    warns += codex_warns;
+
     println!("────────────────────────────────────────");
     if errors == 0 {
         println!("결과: PASS (경고 {})", warns);
@@ -1909,6 +2046,92 @@ fn handle_doctor(root: &Path, state_dir: &Path, modules_dir: &Path) -> Result<i3
         );
         Ok(1)
     }
+}
+
+/// SS13 "Codex 서브체크" (runtime-abstraction-design.md §7) — additive to `handle_doctor`: a new
+/// helper + the single call site above. Every check 1-8 above stays byte-identical; these five
+/// are informational for non-Codex users. Absence of Codex-specific assets is `⚠` (expected for
+/// anyone not using Codex), never `✗` — the one exception is a hooks.json that exists but fails
+/// to parse, since that's a real defect regardless of which runtime the reader uses.
+fn doctor_codex_section(root: &Path) -> (u32, u32) {
+    let mut errors = 0u32;
+    let mut warns = 0u32;
+
+    println!("────────────────────────────────────────");
+    println!("Codex 서브체크 (SS13 — 부재는 비-Codex 사용자에겐 정상)");
+
+    // 9a. codex CLI on PATH.
+    if command_exists("codex") {
+        println!("✓ codex CLI 발견됨");
+    } else {
+        println!("⚠ codex CLI 없음(PATH) — Codex 런타임 미사용 시 정상");
+        warns += 1;
+    }
+
+    // 9b. .codex/hooks.json — presence + JSON parse (a parse *failure* is a real defect).
+    let hooks_json = root.join(".codex/hooks.json");
+    match std::fs::read_to_string(&hooks_json) {
+        Err(_) => {
+            println!("⚠ .codex/hooks.json 없음 — Codex 게이트/저장 훅 미배선");
+            warns += 1;
+        }
+        Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(_) => println!("✓ .codex/hooks.json 유효 JSON"),
+            Err(e) => {
+                println!("✗ .codex/hooks.json JSON 파싱 실패: {}", e);
+                errors += 1;
+            }
+        },
+    }
+
+    // 9c. .agents/skills/ — at least one SKILL.md (to-codex.sh emission target).
+    let skills_dir = root.join(".agents/skills");
+    let skill_count = std::fs::read_dir(&skills_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().join("SKILL.md").exists())
+                .count()
+        })
+        .unwrap_or(0);
+    if skill_count > 0 {
+        println!("✓ .agents/skills/ SKILL.md {}개", skill_count);
+    } else {
+        println!("⚠ .agents/skills/ 에 SKILL.md 없음 — scripts/to-codex.sh --write 로 방출 필요");
+        warns += 1;
+    }
+
+    // 9d. .codex/agents/*.toml — at least one (run-role.sh's E-CODEX-TOML-ABSENT preflight, A8).
+    let agents_dir = root.join(".codex/agents");
+    let toml_count = std::fs::read_dir(&agents_dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("toml"))
+                .count()
+        })
+        .unwrap_or(0);
+    if toml_count > 0 {
+        println!("✓ .codex/agents/*.toml {}개", toml_count);
+    } else {
+        println!("⚠ .codex/agents/*.toml 없음 — run-role.sh가 E-CODEX-TOML-ABSENT로 종료 예정(A8)");
+        warns += 1;
+    }
+
+    // 9e. RuntimeHost detection — informational only, unknown is never ⚠/✗ (§5 unknown 의미론).
+    let detection = runtime_host::detect(&|k| std::env::var(k).ok());
+    match detection.host {
+        runtime_host::RuntimeHost::Unknown => {
+            println!("· RuntimeHost 감지: unknown(해당 없음 — 훅/플러그인 컨텍스트 밖)")
+        }
+        h => println!(
+            "· RuntimeHost 감지: {} (source={})",
+            h.as_str(),
+            detection.source
+        ),
+    }
+
+    (errors, warns)
 }
 
 /// Classifies hooks block keys into (comment/invalid keys, unknown event keys).
@@ -1957,6 +2180,7 @@ fn is_executable(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     fn keys(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -1991,5 +2215,102 @@ mod tests {
         let (bad, unknown) = classify_hook_keys(k.iter());
         assert!(bad.is_empty());
         assert_eq!(unknown, vec!["BogusEvent".to_string()]);
+    }
+
+    fn state_init_action(
+        codename: &str,
+        level: u8,
+        project_id: Option<&str>,
+        force: bool,
+    ) -> StateAction {
+        StateAction::Init {
+            codename: codename.to_string(),
+            level,
+            lang: "en".to_string(),
+            project_id: project_id.map(str::to_string),
+            force,
+        }
+    }
+
+    #[test]
+    fn state_init_creates_schema_valid_manifest_for_all_levels() {
+        for level in 0..=4 {
+            let dir = TempDir::new().unwrap();
+            let code = handle_state(
+                state_init_action("BATHOS", level, Some("bathos-cli-test"), false),
+                dir.path(),
+            )
+            .unwrap();
+            assert_eq!(code, 0);
+
+            let manifest = std::fs::read_to_string(dir.path().join("manifest.json")).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+            validate_manifest(&value).unwrap();
+            assert_eq!(value["codename"], "BATHOS");
+            assert_eq!(value["current_level"], level);
+            assert_eq!(value["lang"], "en");
+            assert_eq!(value["project_id"], "bathos-cli-test");
+        }
+    }
+
+    #[test]
+    fn state_init_preserves_existing_manifest_without_force_and_replaces_with_force() {
+        let dir = TempDir::new().unwrap();
+        assert_eq!(
+            handle_state(
+                state_init_action("ORIGINAL", 1, Some("bathos-original"), false),
+                dir.path(),
+            )
+            .unwrap(),
+            0
+        );
+        let manifest_path = dir.path().join("manifest.json");
+        let original = std::fs::read_to_string(&manifest_path).unwrap();
+
+        assert_eq!(
+            handle_state(
+                state_init_action("REPLACEMENT", 2, Some("bathos-replacement"), false),
+                dir.path(),
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(std::fs::read_to_string(&manifest_path).unwrap(), original);
+
+        assert_eq!(
+            handle_state(
+                state_init_action("REPLACEMENT", 2, Some("bathos-replacement"), true),
+                dir.path(),
+            )
+            .unwrap(),
+            0
+        );
+        let replaced: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        assert_eq!(replaced["codename"], "REPLACEMENT");
+        assert_eq!(replaced["current_level"], 2);
+        assert_eq!(replaced["project_id"], "bathos-replacement");
+    }
+
+    #[test]
+    fn state_init_rejects_invalid_level_and_project_id_without_writing() {
+        for action in [
+            state_init_action("BATHOS", 5, Some("bathos-valid"), false),
+            state_init_action("BATHOS", 0, Some("invalid"), false),
+            state_init_action("BATHOS", 0, Some("bathos-"), false),
+            state_init_action("", 0, Some("bathos-valid"), false),
+        ] {
+            let dir = TempDir::new().unwrap();
+            assert_eq!(handle_state(action, dir.path()).unwrap(), 1);
+            assert!(!dir.path().join("manifest.json").exists());
+        }
+
+        let dir = TempDir::new().unwrap();
+        let mut invalid_lang = state_init_action("BATHOS", 0, Some("bathos-valid"), false);
+        if let StateAction::Init { lang, .. } = &mut invalid_lang {
+            *lang = "x".to_string();
+        }
+        assert_eq!(handle_state(invalid_lang, dir.path()).unwrap(), 1);
+        assert!(!dir.path().join("manifest.json").exists());
     }
 }

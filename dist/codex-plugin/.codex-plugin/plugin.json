@@ -1,0 +1,11 @@
+{
+  "name": "bathos",
+  "version": "0.1.0",
+  "description": "BATHOS — 17역할 7웨이브 AI Workflow Agent 메서드 패키지 (Codex CLI 네이티브 플러그인: skills + hooks)",
+  "author": {
+    "name": "BATHOS project"
+  },
+  "keywords": ["orchestration", "multi-agent", "workflow", "bathos"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
+}

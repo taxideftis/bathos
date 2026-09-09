@@ -183,12 +183,14 @@ Write-Host '  2) Enable Claude Code Agent Teams (the bundled settings.json alrea
 Write-Host '       $env:CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1"'
 Write-Host ''
 Write-Host '  3) Open Claude Code in your project and drive the pipeline:'
-Write-Host '       /team-kickoff'
+Write-Host '       /team-kickoff                     # seeds a schema-valid manifest via bathos state init'
 Write-Host '       /route /abs/path/to/project'
 Write-Host '       /wave1-discovery /abs/path   ...  /wave6-verify-report /abs/path'
 Write-Host '       /team-confirm'
 Write-Host ''
 Write-Host '  Try the engine directly:'
+Write-Host "       & `"$Bin`" -s .agent-team\_state state init --codename MYPROJECT"
+Write-Host ''
 Write-Host "     '{`"scope`":`"feature`",`"novelty`":true,`"regulation_ip`":false,`"team_size`":`"medium`"}' |"
 Write-Host "       & `"$Bin`" --state-dir .agent-team\_state route decide"
 Write-Host ''

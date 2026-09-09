@@ -21,12 +21,31 @@
 # 지목하는데, 옛 SRC_ERE 경계가 '/'를 인정하지 않아 T1이 미발화(fail-open)했다.
 # 경계에 '/'를 추가한 수정을 B-19(FAIL->exit2)·B-20(PASS->exit0)으로 잠근다.
 #
+# story-01(2026-07-23) 갱신: ADR-CX-02 2층 대칭 광폭화 — matcher뿐 아니라
+# 스크립트 내부 T1/T2 case도 별칭 tool_name(Bash/Edit/Write)을 대칭으로
+# 넓혔다. B-17을 "Bash 무해" 전제에서 "Bash도 발화" 전제로 갱신하고
+# B-21~B-25로 나머지 별칭 조합을 계약화한다.
+#
+# story-02(2026-07-23) 갱신: stop-save stdout 무출력 봉인(B-11~B-14 보강) +
+# matcher 정본 바이트단위 일치 검증(config.toml.example ↔ .codex/hooks.json).
+#
+# story-13(2026-07-23) 갱신: bash(dist/lib/host-detect.sh) ↔ Rust
+# (bathos-state::runtime_host::detect, `bathos runtime`) 교차 검증 5행 —
+# 한쪽만 고치면 이 절이 깨진다(D-RT5 드리프트 방지).
+#
+# 타겟 버전 이동(2026-07-23, 리드 결정): v0.144.5 → v0.145.0+(2026-07-21
+# stable). 위 P5/P5.1 실측 기록(2026-07-16/17)은 v0.144.5 설치본 결과이므로
+# 고쳐 쓰지 않는다 — 픽스처가 실측 3종+별칭 3종 합집합을 쓰는 이유가 바로
+# 이 버전 이동 같은 드리프트를 흡수하기 위해서다. v0.145.0+ 라이브 재실측은
+# probe.sh(story-03)·story-20 몫.
+#
 # 실행: bash codex-adapter/hooks/_test-codex-hooks.sh
 # =============================================================================
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOKS_DIR="$SCRIPT_DIR"
+BASH_BIN="$(command -v bash)"
 
 TMPDIR_BASE="$(mktemp -d)"
 cleanup() { rm -rf "$TMPDIR_BASE"; }
@@ -143,11 +162,24 @@ json_shell_write_src() {
   # (§4 T1 케이스가 apply_patch 외 shell/exec_command도 포함하는지 검증).
   printf '{"session_id":"s1","turn_id":"t1","hook_event_name":"PreToolUse","tool_name":"shell","cwd":"%s","tool_input":{"command":"sed -i \\"\\" \\"s/x/y/\\" core/crates/bathos-cli/src/main.rs"}}' "$1"
 }
-json_legacy_bash_wave() {
-  # P4가 가정했던(그러나 실제로는 존재하지 않는) tool_name "Bash"로 동일한
-  # 웨이브 진입 명령을 보낸다 — Bash는 케이스문에 없으므로 TRIGGER가 비고
-  # bathos 호출 없이 즉시 exit 0이어야 한다(= 옛 가정이 남아 있어도 무해).
+json_bash_wave() {
+  # ADR-CX-02(2026-07-23) 2층 대칭 광폭화: tool_name "Bash"(문서 별칭 — P4가
+  # 가정했으나 v0.144.5 실측에는 없던 값)로 웨이브 진입 명령을 보낸다. story-01
+  # 이전에는 케이스문에 Bash가 없어 무해(비트리거)했으나, 지금은 T2 case에
+  # Bash가 추가돼 있으므로 발화해야 한다(P5의 "Bash 무해" 전제는 ADR-CX-02로
+  # 대체됨 — 구 json_legacy_bash_wave()의 옛 주석·함수명 승계 아님, 의도된 변경).
   printf '{"session_id":"s1","turn_id":"t1","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"%s","tool_input":{"command":"bathos wave advance --to W5"}}' "$1"
+}
+json_edit_write_src() {
+  # ADR-CX-02 별칭: tool_name "Edit"(문서 별칭, apply_patch에 대응)로 소스
+  # 경로를 편집 — T1이 발화해야 한다. Claude Code Edit 도구의 file_path 필드
+  # 관례를 그대로 사용(freeze-guard.sh와 동일 스키마 가정).
+  printf '{"session_id":"s1","turn_id":"t1","hook_event_name":"PreToolUse","tool_name":"Edit","cwd":"%s","tool_input":{"file_path":"%s/src/main.rs"}}' "$1" "$1"
+}
+json_write_tool_src() {
+  # ADR-CX-02 별칭: tool_name "Write"(문서 별칭, apply_patch에 대응)로 소스
+  # 경로에 신규 파일을 작성 — T1이 발화해야 한다.
+  printf '{"session_id":"s1","turn_id":"t1","hook_event_name":"PreToolUse","tool_name":"Write","cwd":"%s","tool_input":{"file_path":"%s/src/new_file.rs"}}' "$1" "$1"
 }
 json_unrelated_tool() {
   # 게이트 트리거와 무관한 tool_name(가상의 read 계열 도구) -> 항상 통과.
@@ -159,6 +191,22 @@ json_apply_patch_abspath() {
   # $1 = 픽스처 프로젝트 절대경로. src/ 앞이 '/'인 절대경로가 SRC_ERE 경계에
   # 걸려 source-write로 발화하는지(= 옛 ERE의 fail-open 재발 방지)를 계약화한다.
   printf '{"session_id":"s1","turn_id":"t1","hook_event_name":"PreToolUse","tool_name":"apply_patch","cwd":"%s","tool_input":{"command":"*** Begin Patch *** Update File: %s/src/main.rs @@ -BASELINE +MODIFIED *** End Patch"}}' "$1" "$1"
+}
+json_careful_rm_rf() {
+  printf '{"session_id":"s1","turn_id":"t1","hook_event_name":"PreToolUse","tool_name":"shell","cwd":"%s","tool_input":{"command":"rm -rf /tmp/some-target"}}' "$1"
+}
+json_careful_benign() {
+  printf '{"session_id":"s1","turn_id":"t1","hook_event_name":"PreToolUse","tool_name":"shell","cwd":"%s","tool_input":{"command":"ls -la"}}' "$1"
+}
+json_freeze_apply_patch_path() {
+  # $1=cwd(픽스처 프로젝트 절대경로) $2=cwd 기준 상대경로(예: src/main.rs)
+  printf '{"session_id":"s1","turn_id":"t1","hook_event_name":"PreToolUse","tool_name":"apply_patch","cwd":"%s","tool_input":{"command":"*** Begin Patch *** Update File: %s/%s @@ -BASELINE +MODIFIED *** End Patch"}}' "$1" "$1" "$2"
+}
+json_session_start_resume() {
+  printf '{"hook_event_name":"SessionStart","source":"resume","cwd":"%s"}' "$1"
+}
+json_session_start_clear() {
+  printf '{"hook_event_name":"SessionStart","source":"clear","cwd":"%s"}' "$1"
 }
 json_stop() {
   printf '{"session_id":"s1","turn_id":"t9","hook_event_name":"Stop","stop_hook_active":false,"cwd":"%s","last_assistant_message":"done"}' "$1"
@@ -308,21 +356,74 @@ else
   assert_true "B-16 stderr에 source-write 포함" 0
 fi
 
-# --- B-17: J_LEGACY_BASH_WAVE(tool_name="Bash", P4의 옛 가정), verdict=FAIL -> exit 0, bathos 미호출 ---
-# (c) 과거 P4가 가정했던 "Bash"는 실측 결과 존재하지 않는 tool_name이다.
-# 케이스문에서 완전히 제거됐어도(=더 이상 필요 없음) 여전히 무해(비트리거로
-# 즉시 통과, bathos도 호출하지 않음)함을 계약화한다 — 회귀 시 이 값이 다시
-# T2로 오인 매칭되면 fail-open 리스크가 재발하므로 명시적으로 감시한다.
+# --- B-17: J_BASH_WAVE(tool_name="Bash", ADR-CX-02 별칭), verdict=FAIL -> exit 2 ---
+# (c) ADR-CX-02(2026-07-23)의 2층 대칭 광폭화 이후 "Bash"는 T2(웨이브 진입
+# 명령) case에 포함된 별칭 tool_name이다 — P5 시절엔 (실측에 없어) 무해했지만
+# 지금은 matcher가 넓어졌으니 내부 case도 대칭으로 넓어져야 하고, 발화해야
+# 한다. story-01의 핵심 교훈("두 층 모두 넓혀야 한다")을 정확히 이 케이스가
+# 계약화한다 — 옛 B-17(비트리거 기대)을 그대로 두면 회귀를 놓친다.
 P17="$(make_fixture_project b17)"
 STUB17="$TMPDIR_BASE/stub-b17"; make_stub_bathos "$STUB17" "FAIL"
-RES="$(BATHOS_BIN="$STUB17/bathos" run_hook "$HOOKS_DIR/pretooluse-gate.sh" "$(json_legacy_bash_wave "$P17")")"
-EC="$(get_exit "$RES")"
-assert_exit "B-17 옛 가정 tool_name=Bash + FAIL(verdict) -> 비트리거 통과(exit 0)" 0 "$EC"
-if [ ! -s "$STUB17/calls.log" ]; then
-  assert_true "B-17 calls.log 비어있음(Bash는 트리거 아님 -> bathos 미호출)" 1
+RES="$(BATHOS_BIN="$STUB17/bathos" run_hook "$HOOKS_DIR/pretooluse-gate.sh" "$(json_bash_wave "$P17")")"
+EC="$(get_exit "$RES")"; ERR="$(get_stderr "$RES")"
+assert_exit "B-17 별칭 tool_name=Bash 웨이브진입 + FAIL -> 차단(exit 2)" 2 "$EC"
+if printf '%s' "$ERR" | grep -q 'wave-entry-command'; then
+  assert_true "B-17 stderr에 wave-entry-command 포함" 1
 else
-  assert_true "B-17 calls.log 비어있음(Bash는 트리거 아님 -> bathos 미호출)" 0
+  assert_true "B-17 stderr에 wave-entry-command 포함" 0
 fi
+
+# --------------------------------------------------------------------------
+# B-21 ~ B-25: ADR-CX-02 2층 대칭 광폭화 — 별칭 tool_name 회귀(story-01 AC#3)
+# --------------------------------------------------------------------------
+# matcher 광폭화만으로는 불충분하다는 게 ADR-CX-02의 결론이었다(§2.1) — 아래는
+# Bash(T2)·Edit/Write(T1) 각각의 FAIL→exit2 / PASS→exit0 쌍을 계약화한다.
+# (B-17이 Bash+FAIL을 이미 담당하므로 여기서는 Bash+PASS부터.)
+
+# --- B-21: J_BASH_WAVE, verdict=PASS -> exit 0 ---
+P21="$(make_fixture_project b21)"
+STUB21="$TMPDIR_BASE/stub-b21"; make_stub_bathos "$STUB21" "PASS"
+RES="$(BATHOS_BIN="$STUB21/bathos" run_hook "$HOOKS_DIR/pretooluse-gate.sh" "$(json_bash_wave "$P21")")"
+EC="$(get_exit "$RES")"
+assert_exit "B-21 별칭 tool_name=Bash 웨이브진입 + PASS -> 통과(exit 0)" 0 "$EC"
+
+# --- B-22: J_EDIT_WRITE_SRC(tool_name=Edit), verdict=FAIL -> exit 2 ---
+P22="$(make_fixture_project b22)"
+STUB22="$TMPDIR_BASE/stub-b22"; make_stub_bathos "$STUB22" "FAIL"
+RES="$(BATHOS_BIN="$STUB22/bathos" run_hook "$HOOKS_DIR/pretooluse-gate.sh" "$(json_edit_write_src "$P22")")"
+EC="$(get_exit "$RES")"; ERR="$(get_stderr "$RES")"
+assert_exit "B-22 별칭 tool_name=Edit 소스편집 + FAIL -> 차단(exit 2)" 2 "$EC"
+if printf '%s' "$ERR" | grep -q 'source-write'; then
+  assert_true "B-22 stderr에 source-write 포함" 1
+else
+  assert_true "B-22 stderr에 source-write 포함" 0
+fi
+
+# --- B-23: J_EDIT_WRITE_SRC(tool_name=Edit), verdict=PASS -> exit 0 ---
+P23="$(make_fixture_project b23)"
+STUB23="$TMPDIR_BASE/stub-b23"; make_stub_bathos "$STUB23" "PASS"
+RES="$(BATHOS_BIN="$STUB23/bathos" run_hook "$HOOKS_DIR/pretooluse-gate.sh" "$(json_edit_write_src "$P23")")"
+EC="$(get_exit "$RES")"
+assert_exit "B-23 별칭 tool_name=Edit 소스편집 + PASS -> 통과(exit 0)" 0 "$EC"
+
+# --- B-24: J_WRITE_TOOL_SRC(tool_name=Write), verdict=FAIL -> exit 2 ---
+P24="$(make_fixture_project b24)"
+STUB24="$TMPDIR_BASE/stub-b24"; make_stub_bathos "$STUB24" "FAIL"
+RES="$(BATHOS_BIN="$STUB24/bathos" run_hook "$HOOKS_DIR/pretooluse-gate.sh" "$(json_write_tool_src "$P24")")"
+EC="$(get_exit "$RES")"; ERR="$(get_stderr "$RES")"
+assert_exit "B-24 별칭 tool_name=Write 소스작성 + FAIL -> 차단(exit 2)" 2 "$EC"
+if printf '%s' "$ERR" | grep -q 'source-write'; then
+  assert_true "B-24 stderr에 source-write 포함" 1
+else
+  assert_true "B-24 stderr에 source-write 포함" 0
+fi
+
+# --- B-25: J_WRITE_TOOL_SRC(tool_name=Write), verdict=PASS -> exit 0 ---
+P25="$(make_fixture_project b25)"
+STUB25="$TMPDIR_BASE/stub-b25"; make_stub_bathos "$STUB25" "PASS"
+RES="$(BATHOS_BIN="$STUB25/bathos" run_hook "$HOOKS_DIR/pretooluse-gate.sh" "$(json_write_tool_src "$P25")")"
+EC="$(get_exit "$RES")"
+assert_exit "B-25 별칭 tool_name=Write 소스작성 + PASS -> 통과(exit 0)" 0 "$EC"
 
 # --- B-18: J_UNRELATED_TOOL(tool_name=read_file), verdict=FAIL -> exit 0 ---
 # (d) 게이트 트리거와 무관한 tool_name은 verdict와 무관하게 항상 통과.
@@ -371,11 +472,19 @@ assert_exit "B-20 apply_patch 절대경로 src/ + PASS -> 통과(exit 0)" 0 "$EC
 printf '\n=== stop-save.sh (B-11 ~ B-14) ===\n'
 
 # --- B-11: J_STOP -> session-state.json 존재·유효 JSON, 로그 dump=ok, 스냅샷 아카이브 생성 ---
+# story-02 AC#4 봉인 겸용: 1회 실행으로 exit·stdout을 함께 확인한다(run_hook()은
+# stdout을 버리므로 여기만 파이프 직접 조합 — stdout 1바이트도 없어야 한다,
+# CT-HOOK-STOP "decision:block 의미 반전" 회피 계약).
 P11="$(make_fixture_project b11)"
 STUB11="$TMPDIR_BASE/stub-b11"; make_stub_bathos "$STUB11" "PASS"
-RES="$(BATHOS_BIN="$STUB11/bathos" run_hook "$HOOKS_DIR/stop-save.sh" "$(json_stop "$P11")")"
-EC="$(get_exit "$RES")"
+STDOUT_B11="$(printf '%s' "$(json_stop "$P11")" | BATHOS_BIN="$STUB11/bathos" bash "$HOOKS_DIR/stop-save.sh")"
+EC=$?
 assert_exit "B-11 Stop 저장 -> exit 0" 0 "$EC"
+if [ -z "$STDOUT_B11" ]; then
+  assert_true "B-11 stdout 무출력(0바이트) 봉인" 1
+else
+  assert_true "B-11 stdout 무출력(0바이트) 봉인" 0
+fi
 
 STATE_DIR_11="$P11/.agent-team/_state"
 if [ -f "$STATE_DIR_11/session-state.json" ] && head -c1 "$STATE_DIR_11/session-state.json" | grep -q '{'; then
@@ -397,9 +506,14 @@ fi
 
 # --- B-12: J_STOP, BATHOS_BIN=/nonexistent -> 로그 dump=no-bathos, session-state.json 미생성(기존본 미파괴) ---
 P12="$(make_fixture_project b12)"
-RES="$(BATHOS_BIN=/nonexistent run_hook "$HOOKS_DIR/stop-save.sh" "$(json_stop "$P12")")"
-EC="$(get_exit "$RES")"
+STDOUT_B12="$(printf '%s' "$(json_stop "$P12")" | BATHOS_BIN=/nonexistent bash "$HOOKS_DIR/stop-save.sh")"
+EC=$?
 assert_exit "B-12 bathos 없음 -> exit 0" 0 "$EC"
+if [ -z "$STDOUT_B12" ]; then
+  assert_true "B-12 stdout 무출력(0바이트) 봉인" 1
+else
+  assert_true "B-12 stdout 무출력(0바이트) 봉인" 0
+fi
 STATE_DIR_12="$P12/.agent-team/_state"
 if grep -q 'dump=no-bathos' "$STATE_DIR_12/codex-stop-save.log" 2>/dev/null; then
   assert_true "B-12 로그에 dump=no-bathos" 1
@@ -434,14 +548,191 @@ P14="$(make_fixture_project b14)"
 STUB14="$TMPDIR_BASE/stub-b14"; make_stub_bathos "$STUB14" "PASS"
 STATE_DIR_14="$P14/.agent-team/_state"
 BEFORE_LISTING="$(ls -la "$STATE_DIR_14" 2>/dev/null)"
-RES="$(BATHOS_BIN="$STUB14/bathos" run_hook "$HOOKS_DIR/stop-save.sh" "$(json_stop_active "$P14")")"
-EC="$(get_exit "$RES")"
+STDOUT_B14="$(printf '%s' "$(json_stop_active "$P14")" | BATHOS_BIN="$STUB14/bathos" bash "$HOOKS_DIR/stop-save.sh")"
+EC=$?
 AFTER_LISTING="$(ls -la "$STATE_DIR_14" 2>/dev/null)"
 assert_exit "B-14 stop_hook_active=true -> exit 0" 0 "$EC"
+if [ -z "$STDOUT_B14" ]; then
+  assert_true "B-14 stdout 무출력(0바이트) 봉인" 1
+else
+  assert_true "B-14 stdout 무출력(0바이트) 봉인" 0
+fi
 if [ "$BEFORE_LISTING" = "$AFTER_LISTING" ]; then
   assert_true "B-14 아무 파일도 변경 없음(루프 가드)" 1
 else
   assert_true "B-14 아무 파일도 변경 없음(루프 가드)" 0
+fi
+
+# ==========================================================================
+# C-1 ~ C-4: session-start.sh (story-14, CT-HOOK-SESSIONSTART)
+# ==========================================================================
+printf '\n=== session-start.sh (C-1 ~ C-4) ===\n'
+
+# --- C-1: resume + 스냅샷 존재(make_fixture_project 기본 seed) -> exit 0, 안내 주입 ---
+PC1="$(make_fixture_project c1)"
+RC1_OUT="$(printf '%s' "$(json_session_start_resume "$PC1")" | bash "$HOOKS_DIR/session-start.sh")"
+EC=$?
+assert_exit "C-1 resume+스냅샷 존재 -> exit 0" 0 "$EC"
+if printf '%s' "$RC1_OUT" | grep -q '\[bathos\] 이전 세션 저장분 있음' && printf '%s' "$RC1_OUT" | grep -q 'cold-start'; then
+  assert_true "C-1 stdout에 저장분 안내 + \$cold-start 언급 포함" 1
+else
+  assert_true "C-1 stdout에 저장분 안내 + \$cold-start 언급 포함(실제: $RC1_OUT)" 0
+fi
+
+# --- C-2: resume + 스냅샷 부재 -> exit 0, 무주입(빈 stdout) ---
+PC2="$TMPDIR_BASE/proj-c2"
+mkdir -p "$PC2/.agent-team/_state"
+RC2_OUT="$(printf '%s' "$(json_session_start_resume "$PC2")" | bash "$HOOKS_DIR/session-start.sh")"
+EC=$?
+assert_exit "C-2 resume+스냅샷 부재 -> exit 0" 0 "$EC"
+if [ -z "$RC2_OUT" ]; then
+  assert_true "C-2 stdout 무주입(스냅샷 부재)" 1
+else
+  assert_true "C-2 stdout 무주입(스냅샷 부재, 실제: $RC2_OUT)" 0
+fi
+
+# --- C-3: _state 없는 cwd(비-BATHOS 프로젝트) -> exit 0, 무주입 ---
+PC3="$TMPDIR_BASE/proj-c3-no-state"
+mkdir -p "$PC3"
+RC3_OUT="$(printf '%s' "$(json_session_start_resume "$PC3")" | bash "$HOOKS_DIR/session-start.sh")"
+EC=$?
+assert_exit "C-3 비-BATHOS cwd -> exit 0" 0 "$EC"
+if [ -z "$RC3_OUT" ]; then
+  assert_true "C-3 stdout 무주입(비-BATHOS 프로젝트)" 1
+else
+  assert_true "C-3 stdout 무주입(비-BATHOS 프로젝트, 실제: $RC3_OUT)" 0
+fi
+
+# --- C-4: source=clear + 스냅샷 존재 -> exit 0, 무주입(clear/compact는 안내 대상 아님) ---
+PC4="$(make_fixture_project c4)"
+RC4_OUT="$(printf '%s' "$(json_session_start_clear "$PC4")" | bash "$HOOKS_DIR/session-start.sh")"
+EC=$?
+assert_exit "C-4 source=clear -> exit 0" 0 "$EC"
+if [ -z "$RC4_OUT" ]; then
+  assert_true "C-4 stdout 무주입(source=clear)" 1
+else
+  assert_true "C-4 stdout 무주입(source=clear, 실제: $RC4_OUT)" 0
+fi
+
+# ==========================================================================
+# D-1 ~ D-5: careful-guard-codex.sh · freeze-guard-codex.sh (story-15, CT-SAFETY)
+# 차단 2종(rm -rf·소유 밖 apply_patch) + 통과 3종(정상 명령·비활성·비-BATHOS)
+# ==========================================================================
+printf '\n=== careful-guard-codex.sh · freeze-guard-codex.sh (D-1 ~ D-5) ===\n'
+
+# --- D-1(차단): careful — rm -rf -> exit 2 ---
+PD1="$(make_fixture_project d1)"
+RES="$(run_hook "$HOOKS_DIR/careful-guard-codex.sh" "$(json_careful_rm_rf "$PD1")")"
+EC="$(get_exit "$RES")"; ERR="$(get_stderr "$RES")"
+assert_exit "D-1 careful: rm -rf -> 차단(exit 2)" 2 "$EC"
+if printf '%s' "$ERR" | grep -q 'BLOCKED'; then
+  assert_true "D-1 stderr에 BLOCKED 포함" 1
+else
+  assert_true "D-1 stderr에 BLOCKED 포함" 0
+fi
+
+# --- D-2(차단): freeze — BATHOS_OWNED_PATHS="src/**" 활성 상태에서 소유 밖 apply_patch -> exit 2 ---
+PD2="$(make_fixture_project d2)"
+RES="$(BATHOS_OWNED_PATHS="src/**" run_hook "$HOOKS_DIR/freeze-guard-codex.sh" "$(json_freeze_apply_patch_path "$PD2" "outside/secret.txt")")"
+EC="$(get_exit "$RES")"; ERR="$(get_stderr "$RES")"
+assert_exit "D-2 freeze: 소유 밖 apply_patch -> 차단(exit 2)" 2 "$EC"
+if printf '%s' "$ERR" | grep -q 'BLOCKED'; then
+  assert_true "D-2 stderr에 BLOCKED 포함" 1
+else
+  assert_true "D-2 stderr에 BLOCKED 포함" 0
+fi
+
+# --- D-3(통과): careful — 정상 명령(ls -la) -> exit 0 ---
+PD3="$(make_fixture_project d3)"
+RES="$(run_hook "$HOOKS_DIR/careful-guard-codex.sh" "$(json_careful_benign "$PD3")")"
+EC="$(get_exit "$RES")"
+assert_exit "D-3 careful: 정상 명령 -> 통과(exit 0)" 0 "$EC"
+
+# --- D-4(통과): freeze — BATHOS_OWNED_PATHS 미설정(비활성) -> 소유 밖이어도 통과 ---
+PD4="$(make_fixture_project d4)"
+RES="$(run_hook "$HOOKS_DIR/freeze-guard-codex.sh" "$(json_freeze_apply_patch_path "$PD4" "outside/secret.txt")")"
+EC="$(get_exit "$RES")"
+assert_exit "D-4 freeze: BATHOS_OWNED_PATHS 미설정(비활성) -> 통과(exit 0)" 0 "$EC"
+
+# --- D-5(통과): 비-BATHOS cwd(_state 없음) -> 둘 다 통과(exit 0), rm -rf여도 ---
+D5_NO_STATE="$TMPDIR_BASE/proj-d5-no-state"
+mkdir -p "$D5_NO_STATE"
+RES="$(run_hook "$HOOKS_DIR/careful-guard-codex.sh" "$(json_careful_rm_rf "$D5_NO_STATE")")"
+EC="$(get_exit "$RES")"
+assert_exit "D-5a 비-BATHOS cwd(careful, rm -rf여도) -> 통과(exit 0)" 0 "$EC"
+RES="$(BATHOS_OWNED_PATHS="src/**" run_hook "$HOOKS_DIR/freeze-guard-codex.sh" "$(json_freeze_apply_patch_path "$D5_NO_STATE" "outside/secret.txt")")"
+EC="$(get_exit "$RES")"
+assert_exit "D-5b 비-BATHOS cwd(freeze, 소유 밖이어도) -> 통과(exit 0)" 0 "$EC"
+
+# --- 소유 경로 내부는 정상 통과(회귀 확인 — freeze가 owned 경로까지 오차단하지 않음) ---
+PD6="$(make_fixture_project d6)"
+RES="$(BATHOS_OWNED_PATHS="src/**" run_hook "$HOOKS_DIR/freeze-guard-codex.sh" "$(json_freeze_apply_patch_path "$PD6" "src/main.rs")")"
+EC="$(get_exit "$RES")"
+assert_exit "D-6 freeze: 소유 경로 내부 apply_patch -> 통과(exit 0, 오차단 0 확인)" 0 "$EC"
+
+# ==========================================================================
+# matcher 정본 바이트단위 일치 검증 (story-02 AC#5 + story-15 AC#8 최종 봉인)
+# ==========================================================================
+# matcher 드리프트로 게이트가 fail-open된 전례가 3회다(P4/P5/P5.1). 수기로
+# 같은 문자열을 여러 파일에 복제하는 4개 지점(config.toml.example ·
+# .codex/hooks.json · careful-guard-codex.sh · freeze-guard-codex.sh 헤더 주석)
+# 마다 assertion 없이는 4차 재발을 못 막는다 — 이 절이 그 자동 검증이다
+# (불일치 1건 = FAIL, story-15 AC#8 — 훅 체인 마지막에서 4점 전부 대조).
+printf '\n=== matcher 정본 바이트단위 일치 검증 (story-02 AC#5 + story-15 AC#8) ===\n'
+CONFIG_TOML="$SCRIPT_DIR/../config.toml.example"
+HOOKS_JSON="$SCRIPT_DIR/../../.codex/hooks.json"
+CAREFUL_SH="$SCRIPT_DIR/careful-guard-codex.sh"
+FREEZE_SH="$SCRIPT_DIR/freeze-guard-codex.sh"
+MATCHER_TOML="$(grep -m1 '^matcher = ' "$CONFIG_TOML" | sed -E 's/^matcher = "(.*)"$/\1/')"
+MATCHER_JSON="$(grep -m1 '"matcher"' "$HOOKS_JSON" | sed -E 's/.*"matcher"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
+MATCHER_CAREFUL="$(grep -m1 '^#   \^(' "$CAREFUL_SH" | sed -E 's/^#[[:space:]]*//')"
+MATCHER_FREEZE="$(grep -m1 '^#   \^(' "$FREEZE_SH" | sed -E 's/^#[[:space:]]*//')"
+if [ -n "$MATCHER_TOML" ] \
+  && [ "$MATCHER_TOML" = "$MATCHER_JSON" ] \
+  && [ "$MATCHER_TOML" = "$MATCHER_CAREFUL" ] \
+  && [ "$MATCHER_TOML" = "$MATCHER_FREEZE" ]; then
+  assert_true "matcher 정본 4점 일치: toml/hooks.json/careful/freeze ($MATCHER_TOML)" 1
+else
+  assert_true "matcher 정본 불일치! toml='$MATCHER_TOML' json='$MATCHER_JSON' careful='$MATCHER_CAREFUL' freeze='$MATCHER_FREEZE'" 0
+fi
+
+# ==========================================================================
+# bash↔Rust 교차 검증 (story-13 AC#4, D-RT5) — 동일 5행 픽스처에 대해
+# `bathos_detect_host`(bash, dist/lib/host-detect.sh)와 `bathos runtime`
+# (Rust, bathos-state::runtime_host::detect)가 같은 판정을 내는지 확인한다.
+# 한쪽 진리표만 고치면 이 절이 red가 된다 — 그것이 목적이다.
+# ==========================================================================
+printf '\n=== bash<->Rust 교차 검증: bathos_detect_host vs bathos runtime (story-13 AC#4) ===\n'
+HOST_DETECT_SH="$SCRIPT_DIR/../../dist/lib/host-detect.sh"
+BATHOS_BIN_REAL=""
+for cand in "$SCRIPT_DIR/../../core/target/release/bathos" "$SCRIPT_DIR/../../core/target/debug/bathos"; do
+  if [ -x "$cand" ]; then BATHOS_BIN_REAL="$cand"; break; fi
+done
+
+if [ -z "$BATHOS_BIN_REAL" ]; then
+  printf "${YELLOW}[SKIP]${NC} bash<->Rust 교차 검증 5행 — bathos 릴리스/디버그 바이너리 없음(cargo build 먼저 필요, PASS/FAIL 카운트에 반영 안 함)\n"
+else
+  # cross_check_row <설명> [KEY=VALUE ...] — env -i로 완전 격리한 뒤 주어진
+  # 키만 주입해 양쪽 구현을 같은 조건에서 호출한다("이 키가 켜져 있는가"만
+  # 보는 판정이므로 격리가 곧 정확한 재현이다). Rust 쪽은 텍스트 출력(1단어),
+  # bash 쪽은 함수 반환값을 그대로 비교한다.
+  cross_check_row() {
+    local desc="$1"; shift
+    local rust_out bash_out
+    rust_out="$(env -i "$@" "$BATHOS_BIN_REAL" runtime 2>/dev/null)"
+    bash_out="$(env -i "$@" "$BASH_BIN" -c "source '$HOST_DETECT_SH'; bathos_detect_host" 2>/dev/null)"
+    if [ "$rust_out" = "$bash_out" ]; then
+      assert_true "교차검증[$desc]: bathos runtime == bathos_detect_host ($rust_out)" 1
+    else
+      assert_true "교차검증[$desc]: 불일치! rust=$rust_out bash=$bash_out" 0
+    fi
+  }
+
+  cross_check_row "forced"               BATHOS_FORCE_HOST=codex
+  cross_check_row "codex"                PLUGIN_ROOT=/some/plugin
+  cross_check_row "claude-hook"          CLAUDE_PROJECT_DIR=/some/project
+  cross_check_row "claude-plugin-legacy" CLAUDE_PLUGIN_ROOT=/some/plugin
+  cross_check_row "none"
 fi
 
 # ==========================================================================

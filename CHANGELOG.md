@@ -24,13 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 출처: ponytail(DietrichGebert/ponytail, MIT)의 **원칙만** 차용 — 페르소나·톤·브랜딩은
     `_recon/ponytail-analysis.md` §6 기존 결정에 따라 도입하지 않음. 고지는 `CREDITS.md`·README 4종.
 
-### Changed
+- **`bathos state init`** — creates a schema-valid `manifest.json` seed for
+  `/team-kickoff`, replacing error-prone LLM hand-authoring across runtimes.
+  Existing state is preserved unless `--force` is explicitly supplied.
 
-- **`/bathos-debt` 앵커 2종으로 확장** — 마크다운 산출물의 `CONCERNS:`에 더해 소스코드의
-  `ponytail: <ceiling>, <upgrade path>` 마커를 함께 수집한다. 매체별 분업(중복 기록 금지)이며,
-  업그레이드 트리거가 없는 마커는 `no-trigger`(`[x]`)로 표시해 "조용히 썩는 부채"를 드러낸다.
-  소스코드 마커는 웨이브 `W5`로 귀속. json 출력에 `anchor`·`ceiling`·`upgrade`·`no_trigger` 필드 추가(가산적).
-  최초 설계의 "`ponytail:` 대신 `CONCERNS:`로 재정의" 결정을 이 확장으로 갱신했다.
+- **Codex CLI runtime porting layer** — added the Codex-native distribution path for the
+  BATHOS workflow: `.agents/skills/**` skills, `.codex/agents/*.toml` subagents,
+  `.codex/hooks.json` project hooks, `dist/codex-plugin/**` plugin bundle assets, and
+  `.codex-out/**` legacy prompt/agent scaffold output. The adapter now includes Codex
+  careful/freeze hooks, SessionStart resume guidance, `probe.sh` drift diagnostics,
+  `bathos runtime` host detection, run-role CI coverage, and generated-skill drift checks.
+  Target baseline is Codex CLI v0.145.0+; authenticated live walkthrough (`story-20`) and
+  `SessionEnd` behavior remain explicitly documented as release-readiness verification
+  items rather than claimed complete.
 
 - **팀 역할 체계 16역할 → 17역할** — Thomas(#12) 다음에 **Michael (#13, Security
   Specialist)** 을 신설했다. 방어적(defensive) 웹·사이버 보안 감사·하드닝 전담 —
@@ -99,6 +105,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/USAGE-en.md` (English usage reference), `docs/QUOTA-{en,kr}.md` (token/quota
   management), `docs/MODULE-GUIDE-{en,kr}.md` (custom plugin authoring), and a
   Documentation navigation hub in `README.md`.
+
+### Changed
+
+- **`/bathos-debt` 앵커 2종으로 확장** — 마크다운 산출물의 `CONCERNS:`에 더해 소스코드의
+  `ponytail: <ceiling>, <upgrade path>` 마커를 함께 수집한다. 매체별 분업(중복 기록 금지)이며,
+  업그레이드 트리거가 없는 마커는 `no-trigger`(`[x]`)로 표시해 "조용히 썩는 부채"를 드러낸다.
+  소스코드 마커는 웨이브 `W5`로 귀속. json 출력에 `anchor`·`ceiling`·`upgrade`·`no_trigger` 필드
+  추가(가산적). 최초 설계의 "`ponytail:` 대신 `CONCERNS:`로 재정의" 결정을 이 확장으로 갱신했다.
 
 ### Fixed
 

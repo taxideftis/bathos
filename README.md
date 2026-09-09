@@ -57,6 +57,7 @@ BATHOS turns a **single Claude Code session into a disciplined product team** �
 | **Custom module authoring** | [`docs/MODULE-GUIDE-en.md`](docs/MODULE-GUIDE-en.md) | [`docs/MODULE-GUIDE-kr.md`](docs/MODULE-GUIDE-kr.md) | [`docs/MODULE-GUIDE-es.md`](docs/MODULE-GUIDE-es.md) | Write your own plugin (module.yaml, trigger DSL, W4) without touching the core |
 | **Role customization** | [`docs/ROLE-GUIDE-en.md`](docs/ROLE-GUIDE-en.md) | [`docs/ROLE-GUIDE-kr.md`](docs/ROLE-GUIDE-kr.md) | [`docs/ROLE-GUIDE-es.md`](docs/ROLE-GUIDE-es.md) | Adapt the 17 roles via the 3-layer override (base → team → user) |
 | **Architecture** (contributors) | [`docs/ARCHITECTURE-en.md`](docs/ARCHITECTURE-en.md) | [`docs/ARCHITECTURE-kr.md`](docs/ARCHITECTURE-kr.md) | [`docs/ARCHITECTURE-es.md`](docs/ARCHITECTURE-es.md) | Crate map, invariants (A9, gate, audit), exit/error codes, contributing |
+| **Codex CLI portability** | *(planned)* | [`docs/codex-adapter-kr.md`](docs/codex-adapter-kr.md) · [`docs/PORTABILITY-kr.md`](docs/PORTABILITY-kr.md) | *(planned)* | Codex skills, hooks, subagents, plugin bundle, runtime detection, and known live-verification gaps |
 | **FAQ** | [`docs/FAQ-en.md`](docs/FAQ-en.md) | [`docs/FAQ-kr.md`](docs/FAQ-kr.md) | [`docs/FAQ-es.md`](docs/FAQ-es.md) | Common questions & troubleshooting |
 | **Operating rules / principles** | [`CLAUDE.md`](CLAUDE.md) · [`ETHOS.md`](ETHOS.md) | | | Team operating rules and the gstack-derived ETHOS |
 
@@ -278,7 +279,7 @@ Exit codes: `0` success · `1` error · `2` gate FAIL (used by hooks to block).
 
 | Command | Subcommands | Purpose |
 |---|---|---|
-| `state` | `validate`, `show` | Single source of truth — `manifest.json` schema validation & inspection |
+| `state` | `init`, `validate`, `show` | Create, validate, and inspect the `manifest.json` single source of truth |
 | `route` | `decide`, `show` | Scale-adaptive level recommendation (stdin/`--stakes-json`; `--confirm <0-4>` records) |
 | `wave` | `init`, `activate`, `show` | 7-wave state transitions (concurrency ≤ 3 enforced) |
 | `gate` | `verdict`, `show` | Record / read gate verdicts (PASS/CONCERNS/FAIL; FAIL → exit 2) |
@@ -288,6 +289,7 @@ Exit codes: `0` success · `1` error · `2` gate FAIL (used by hooks to block).
 | `doctor` | — | **Install/wiring preflight** — `BATHOS_BIN`, `jq`, Agent Teams flag, `settings.json` hooks block (comment-key hang), hook exec bits, manifest schema, audit chain |
 
 ```bash
+bathos -s _state state init --codename MYPROJECT       # create a schema-valid manifest seed
 bathos -s _state state validate                       # validate manifest.json
 bathos -s _state gate verdict Implementation PASS Matthew
 bathos -s _state gate show                            # latest Implementation gate (JSON)
@@ -424,6 +426,11 @@ Team artifacts a run produces live under `.agent-team/` (plan, discovery, archit
 
 - It is a **method package that runs on Claude Code**, not a standalone app, and depends on the **experimental Agent Teams** feature.
 - The engine is verified: **510 Rust tests + 86 hook determinism checks, all green**; `cargo clippy -D warnings` clean; release builds reproducibly.
+- Codex CLI support is in active porting: the repo now emits Codex skills, subagents,
+  project hooks, a plugin bundle, runtime detection, and adapter drift diagnostics. The
+  remaining release-readiness gap is authenticated live verification (`story-20`),
+  including hook wiring, skill invocation, plugin activation, and current `SessionEnd`
+  behavior.
 - It is **not yet production-hardened**; APIs, schemas, and command names may change before 1.0.
 - Some wave commands are **orchestration prompts** the lead runs in Claude Code (they spawn/review teammates), not fully autonomous engine flows.
 

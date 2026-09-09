@@ -8,6 +8,26 @@
 
 ---
 
+## Codex CLI 포팅 상태
+
+이 문서는 아직 Claude Code 사용법을 정본으로 설명한다. Codex CLI 포팅은 별도
+어댑터 레이어로 진행 중이며, 저장소에는 다음 자산이 추가됐다:
+
+- `.agents/skills/**` — Codex skills 정본(`$route`, `$wave*`, `$save-session` 등).
+- `.codex/agents/*.toml` — 17역할 Codex subagent 정의(Paul 제외).
+- `.codex/hooks.json` + `codex-adapter/hooks/*.sh` — Codex project hooks
+  (게이트, 저장, careful/freeze, resume 안내).
+- `dist/codex-plugin/**` — Codex plugin 번들 후보.
+- `bathos runtime` + `dist/lib/host-detect.sh` — 현재 호스트 런타임 감지.
+
+현재 기준선은 **Codex CLI v0.145.0+**다. 단, 인증된 Codex 세션에서의 live
+walkthrough(`story-20`)는 아직 릴리스 게이트로 남아 있다. 특히 hook wiring,
+skills 호출, subagent model/agent_type 동작, plugin 활성화, `SessionEnd` 실제
+발화 여부는 `codex-adapter/probe.sh`와 W6 검증에서 증명해야 한다. 상세는
+[`docs/codex-adapter-kr.md`](codex-adapter-kr.md)를 본다.
+
+---
+
 ## 0. 핵심 개념 — 두 개의 실행면을 구분하라
 
 BATHOS를 제대로 쓰기 위해 먼저 짚어야 할 것은 딱 하나다. BATHOS는 성격이 전혀 다른 **두 개의 층**에서 동시에 돌아간다. 이 둘을 구분하는 순간, 나머지 사용법은 대부분 자연스럽게 풀린다.
@@ -212,9 +232,15 @@ stakes를 레벨로 옮기는 추천 규칙은 `bathos-router`가 계산한다. 
 
 ### 6.1 `bathos state` — 상태 SSOT (B1)
 ```bash
+bathos --state-dir .agent-team/_state state init \
+       --codename MYPROJECT                            # 스키마 유효 manifest.json seed 생성
 bathos --state-dir .agent-team/_state state validate   # manifest.json JSON Schema 검증 (VALID/위반목록)
 bathos --state-dir .agent-team/_state state show        # 현재 상태 JSON 출력
 ```
+
+`state init`은 기본 `level=0`, `lang=ko`, 자동 `project_id=bathos-<uuid>`로
+최소 유효 상태를 만든다. 기존 manifest는 `--force` 없이는 덮어쓰지 않는다.
+`/team-kickoff`가 이 명령을 호출하므로 일반 사용자는 직접 실행할 필요가 없다.
 
 ### 6.2 `bathos gate` — 게이트 판정 (B3)
 ```bash

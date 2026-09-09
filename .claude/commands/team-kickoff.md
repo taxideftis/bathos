@@ -25,8 +25,17 @@ $1/.agent-team/{00-plan,00-analysis,01-reverse,02-market-analysis,
 **3) task-graph.md 작성** → `$1/.agent-team/00-plan/task-graph.md`
 7웨이브(W0~W6) 태스크 분해 + 의존성 + 파일 소유 경계 초안(특히 W5 src 경로 겹침 0).
 
-**4) manifest.json 초기화** → `$1/.agent-team/_state/manifest.json`
-필드: project, created, lead, current_level(null — /route로 확정), waves_status(전체 pending), gates[], routing[].
+**4) manifest.json 초기화 — 반드시 엔진 `bathos state init`으로 시딩** → `$1/.agent-team/_state/manifest.json`
+manifest는 **손으로 작성하지 마세요.** LLM 수기 작성은 런타임마다 스키마 결과가 달라 무효 manifest를 낳고(예: Codex 킥오프가 `E-STATE-CORRUPT` 유발), 이후 `bathos gate/wave/route show`를 붕괴시킵니다. 엔진이 `Project::new` + `StateStore::create`(쓰기 전 스키마 검증)로 **항상 유효한 seed**를 만듭니다.
+
+```bash
+# $BATHOS_BIN(없으면 PATH의 bathos). CODENAME=서비스 컨셉에서 뽑은 짧은 ASCII 코드명(예: 프로젝트 디렉터리 basename).
+"${BATHOS_BIN:-bathos}" -s "$1/.agent-team/_state" state init --codename "<CODENAME>"
+#   --level 은 지정하지 않음 → 기본 0(잠정). 실제 레벨은 다음 단계 /route에서 확정.
+#   기존 manifest가 있으면 --force 없이는 [E-STATE-EXISTS]로 거부(비파괴적).
+```
+
+성공 출력(`[bathos state init] ✓ manifest.json 생성: … (project_id=bathos-…, level=0)`)을 확인하세요. seed에는 project_id(`bathos-<uuid>`)·codename·created(RFC3339)·status·lang·current_level=0(잠정)과 빈 waves/gates/routing 배열이 스키마대로 채워집니다. 엔진 미발견 시에만 예외적으로 리드가 스키마를 준수해 수기 작성하되, 즉시 `bathos state validate`로 검증합니다.
 
 **5) wave-log.md 초기화** → `$1/.agent-team/_state/wave-log.md`
 "킥오프 완료 — BATHOS 7웨이브 파이프라인 초기화. 다음: /route 로 Scale-Adaptive 레벨 확정."

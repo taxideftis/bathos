@@ -328,11 +328,13 @@ fn frontmatter_field(content: &str, key: &str) -> Option<String> {
 /// whose frontmatter `slug:` field equals `slug`, and returns its `model:` field.
 ///
 /// Matches by the `slug:` frontmatter field rather than by filename pattern (`<n>-<slug>.md`)
-/// because filenames are not a reliable 1:1 key in this repository at the moment — e.g. both
-/// `13-michael-security-specialist.md` and `13-mishael-security-specialist.md` currently exist
-/// side by side (an in-flight naming drift, not this module's concern to resolve) — so
-/// filename-prefix guessing would be ambiguous while the frontmatter `slug:` field is the
-/// actual identity contract every other BATHOS tool (`to-codex.sh`'s `fm_val`) already relies on.
+/// because filenames are not guaranteed to be a reliable 1:1 key in this repository — this
+/// module previously (incorrectly) documented `13-michael-security-specialist.md` and
+/// `13-mishael-security-specialist.md` as coexisting; that was stale (the `mishael-` spelling
+/// was a typo fixed story-19, CF9 — only `13-michael-security-specialist.md` exists now). The
+/// frontmatter `slug:` field remains the right lookup key regardless: it's the actual identity
+/// contract every other BATHOS tool (`to-codex.sh`'s `fm_val`) already relies on, not filename
+/// prefix guessing.
 ///
 /// Returns `None` if `agents_dir` is absent/unreadable or no file's `slug:` matches — this is
 /// not an error (the caller falls through to the final "runtime default" resolve step).
