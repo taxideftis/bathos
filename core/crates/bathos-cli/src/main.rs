@@ -426,7 +426,7 @@ enum ModelAction {
     },
 }
 
-// `waves.<W?>` 역할군(role↔wave 배정) — moved to `bathos_state::wave_roles` (§4-4 of the W5 task
+// `waves.<W?>` role rosters (role↔wave assignment) — moved to `bathos_state::wave_roles` (§4-4 of the W5 task
 // brief) so `model_plan`'s wave-aware resolve/validate and this CLI share one definition instead
 // of two. Use `wave_roles::wave_role_slugs`/`wave_roles::role_wave` directly; nothing left here.
 
@@ -669,7 +669,7 @@ fn handle_panes(
 }
 
 /// No `--mode` given: honors a previously-saved preference (`_state/panes/prefs`) if present;
-/// otherwise, on a real TTY, asks once and saves the answer (§B4.2 "선택 결과를 기억"). On a
+/// otherwise, on a real TTY, asks once and saves the answer (§B4.2 "remember the choice"). On a
 /// non-TTY with no saved preference, defaults to `dump` — the only mode that is always safe to
 /// run unattended (matches `--mode tui`'s own E-PANES-NOTTY guard: a script/CI invocation with
 /// no prior preference should get inert, pipeable text, never an interactive prompt it can't
@@ -2146,7 +2146,7 @@ fn handle_doctor(root: &Path, state_dir: &Path, modules_dir: &Path) -> Result<i3
     }
 }
 
-/// SS13 "Codex 서브체크" (runtime-abstraction-design.md §7) — additive to `handle_doctor`: a new
+/// SS13 "Codex sub-checks" (runtime-abstraction-design.md §7) — additive to `handle_doctor`: a new
 /// helper + the single call site above. Every check 1-8 above stays byte-identical; these five
 /// are informational for non-Codex users. Absence of Codex-specific assets is `⚠` (expected for
 /// anyone not using Codex), never `✗` — the one exception is a hooks.json that exists but fails
@@ -2216,7 +2216,7 @@ fn doctor_codex_section(root: &Path) -> (u32, u32) {
         warns += 1;
     }
 
-    // 9e. RuntimeHost detection — informational only, unknown is never ⚠/✗ (§5 unknown 의미론).
+    // 9e. RuntimeHost detection — informational only, unknown is never ⚠/✗ (§5 unknown semantics).
     let detection = runtime_host::detect(&|k| std::env::var(k).ok());
     match detection.host {
         runtime_host::RuntimeHost::Unknown => {

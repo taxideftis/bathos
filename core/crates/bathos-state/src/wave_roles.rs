@@ -21,7 +21,7 @@ const WAVE_IDS: [&str; 7] = ["W0", "W1", "W2", "W3", "W4", "W5", "W6"];
 /// `"W5"` both match), or `None` if `wave_id` isn't a recognized wave.
 ///
 /// W3/W6's overlap (Thomas/Matthias/Timothy appear in both) is intentional and documented in
-/// `CLAUDE.md` §1 ("+W3 독립 리뷰"/"+W3 보조") — this table transcribes that overlap verbatim
+/// `CLAUDE.md` §1 ("+W3 independent review"/"+W3 assist") — this table transcribes that overlap verbatim
 /// rather than picking one wave per role, so `bathos model show/validate --wave W3` and `--wave
 /// W6` both correctly include them.
 pub fn wave_role_slugs(wave_id: &str) -> Option<&'static [&'static str]> {

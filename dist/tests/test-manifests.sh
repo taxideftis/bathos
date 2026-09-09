@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
 # BATHOS Dynamis — dist/tests/test-manifests.sh
-# Story B1·B2 §5 "테스트 접근" 구현: 매니페스트 스키마 자기검증 + 포인터 유효성.
+# Implements Story B1/B2 §5 "test approach": manifest schema self-check + pointer validity.
 #
-#   1) 공통 필드(name/version/sources/capability_tier) 존재 확인 + 산문 필드 없음
-#      (behavior 텍스트가 통째로 박혀있지 않은지 — 필드 값 길이로 간이 검사)
-#   2) sources.* 의 상대경로가 실제 존재하는 디렉터리를 가리키는지 확인
-#      (깨진 포인터 = 실패). LD-5(최종 조립 전) 갭 처리: 제품 트리에 대상이 아직
-#      없으면 원본 bathos/의 동일 상대경로로 폴백 확인 후 "조립 대기" 로 표기.
-#   3) capability_tier 값이 폐쇄 어휘(full-hook/instruction-only/mcp) 안에 있는지
+#   1) Required fields (name/version/sources/capability_tier) exist, and no prose fields
+#      (checks that behavior text isn't embedded wholesale — a rough field-length test)
+#   2) The relative paths under sources.* point at directories that actually exist
+#      (a broken pointer fails). LD-5 gap handling (before final assembly): if the target
+#      isn't in the product tree yet, fall back to the same relative path under the original
+#      bathos/ and mark it "awaiting assembly".
+#   3) capability_tier is inside the closed vocabulary (full-hook/instruction-only/mcp)
 #
-# marketplace.json은 sources/capability_tier가 없는 것이 정상 스키마이므로
-# plugin.json/manifest.json만 검사한다(check-versions.sh와 동일 대상 규약).
+# For marketplace.json, having no sources/capability_tier is the correct schema, so only
+# plugin.json/manifest.json are checked (same target convention as check-versions.sh).
 # =============================================================================
 set -uo pipefail
 
@@ -46,30 +47,31 @@ for f in "${TARGETS[@]}"; do
   rel="${f#"$BATHOS_ROOT"/}"
   fdir="$(cd "$(dirname "$f")" && pwd)"
 
-  # --- 0) 폐지(deprecated) 매니페스트은 스키마 검사에서 제외 ------------------
-  # 스스로 `"deprecated": true` 를 선언하고 후속 정본을 가리키는 스켈레톤에까지
-  # 현행 필수 필드를 요구하면 오탐이 된다(#35). 예:
-  # dist/manifests/codex/plugin.json 은 `_note` 로 "실스키마 불일치로 폐기 예정,
-  # 정본은 dist/codex-plugin/.codex-plugin/plugin.json" 을 명시하고 `_removal` 로
-  # 삭제 계획까지 적어 둔 파일이다 — 그 파일에 version/sources 를 요구할 이유가 없다.
-  # 암묵 제외 금지 원칙에 따라 건너뛴 사실을 로그로 남긴다(조용히 통과시키지 않음).
+  # --- 0) Deprecated manifests are excluded from the schema check --------------------
+  # Demanding today's required fields from a skeleton that declares `"deprecated": true`
+  # and points at its replacement produces a false positive (#35). Example:
+  # dist/manifests/codex/plugin.json uses `_note` to state that it is slated for removal
+  # (its schema does not match the real host) and that the canonical file is
+  # dist/codex-plugin/.codex-plugin/plugin.json, and records a `_removal` plan — there is
+  # no reason to require version/sources of it.
+  # Per the no-implicit-exclusions rule, the skip is logged (never a silent pass).
   if [[ "$(jq -r '.deprecated // false' "$f")" == "true" ]]; then
     info "$rel — deprecated=true → 스키마 검사 제외(정본으로 대체된 스켈레톤, #35). 파일 삭제는 각 매니페스트의 _removal 계획을 따른다"
     continue
   fi
 
-  # --- 0-b) 호스트 판별 — 필수 필드가 호스트마다 다르다 ----------------------
-  # Codex 플러그인 스키마에는 `sources`·`capability_tier` 가 **존재하지 않는다**
-  # (PR #27 실측 — scripts/build-codex-plugin.sh 헤더 주석, codex-mechanisms.md §4.3).
-  # Codex 는 상대 포인터 대신 `skills`/`hooks` 를 번들로 직접 담는 구조다. 따라서
-  # Claude 플러그인 규약(`sources` 포인터)을 Codex 매니페스트에 적용하면 올바른
-  # 파일을 실패로 판정한다(#35). 호스트별로 요구 필드를 분기한다.
+  # --- 0-b) Host detection — required fields differ per host -------------------------
+  # The Codex plugin schema has **no** `sources` or `capability_tier` field (measured in
+  # PR #27 — see the scripts/build-codex-plugin.sh header, codex-mechanisms.md §4.3).
+  # Instead of relative pointers, Codex bundles `skills`/`hooks` directly. So applying the
+  # Claude plugin convention (`sources` pointers) to a Codex manifest fails a correct file
+  # (#35). Branch the required fields per host.
   case "$rel" in
     *.codex-plugin/*|*/codex-plugin/*|*/manifests/codex/*) host="codex" ;;
     *)                                                     host="claude" ;;
   esac
 
-  # --- 1) 공통 필드 존재 -----------------------------------------------------
+  # --- 1) Required fields exist ----------------------------------------------------
   name="$(jq -r '.name // empty' "$f")"
   version="$(jq -r '.version // empty' "$f")"
   tier="$(jq -r '.capability_tier // empty' "$f")"
@@ -79,7 +81,7 @@ for f in "${TARGETS[@]}"; do
   [[ -n "$version" ]] && ok "$rel — version 존재" || error "$rel — version 필드 없음"
 
   if [[ "$host" == "codex" ]]; then
-    # Codex: `skills` 번들이 포인터 역할을 대신한다. `sources` 부재는 정상이다.
+    # Codex: the `skills` bundle takes the place of pointers; a missing `sources` is normal.
     if [[ "$(jq -r 'has("skills")' "$f")" == "true" ]]; then
       ok "$rel — (codex) skills 번들 존재 — sources 포인터는 이 호스트 스키마에 없음(정상)"
     else
@@ -91,8 +93,8 @@ for f in "${TARGETS[@]}"; do
     ok "$rel — sources 필드 존재"
   fi
 
-  # --- 2) 산문 필드 없음(간이 검사: description을 제외한 값 중 200자 초과 문자열
-  #        필드가 없는지) — behavior 텍스트 임베드 금지(CF-B1 AC1 "<20줄 목표")
+  # --- 2) No prose fields (rough check: no string field longer than 200 chars, description
+  #        aside) — behavior text must not be embedded (CF-B1 AC1 "<20 lines" goal)
   long_field="$(jq -r '
     to_entries
     | map(select(.key != "sources" and .key != "_skeleton_note"))
@@ -105,7 +107,7 @@ for f in "${TARGETS[@]}"; do
     ok "$rel — 산문 임베드 없음(필드 길이 검사 통과)"
   fi
 
-  # --- 3) capability_tier 폐쇄 어휘 검사 --------------------------------------
+  # --- 3) capability_tier closed-vocabulary check ------------------------------------
   if [[ -n "$tier" ]]; then
     if [[ " $VALID_TIERS " == *" $tier "* ]]; then
       ok "$rel — capability_tier=$tier (폐쇄 어휘 내)"
@@ -114,7 +116,7 @@ for f in "${TARGETS[@]}"; do
     fi
   fi
 
-  # --- 4) 포인터 유효성 -------------------------------------------------------
+  # --- 4) Pointer validity ----------------------------------------------------------
   if [[ "$has_sources" == "true" ]]; then
     for key in roles skills commands hooks; do
       ptr="$(jq -r ".sources.${key} // empty" "$f")"
@@ -124,8 +126,9 @@ for f in "${TARGETS[@]}"; do
         ok "$rel — sources.$key -> $ptr (존재)"
         continue
       fi
-      # LD-5 폴백: 제품 트리 미조립 상태에서는 원본 bathos/ 동일 상대 위치로 확인.
-      # (fdir가 dist/... 이므로, "target"의 .claude/xxx 접미사만 뽑아 원본과 대조)
+      # LD-5 fallback: while the product tree is unassembled, check the same relative
+      # location under the original bathos/. (fdir is dist/..., so take only the
+      # .claude/xxx suffix of "target" and compare it against the original.)
       suffix="${ptr##*.claude/}"
       orig_target="$BATHOS_ROOT/../../bathos/.claude/$suffix"
       if [[ -d "$orig_target" ]]; then
