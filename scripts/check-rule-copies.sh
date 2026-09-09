@@ -2,34 +2,38 @@
 # =============================================================================
 # BATHOS Dynamis — check-rule-copies.sh
 #
-# 두 가지 모드를 지원한다(둘 다 CF-B1/B3 뒷받침):
+# Supports two modes (both back CF-B1/B3):
 #
-#   --dup-scan      (기본)  risk-log A-4 필수 조치 — B1/B2 AC1 "무중복" 즉시 검증.
-#                    canonical 소스(역할/스킬/커맨드 산문)의 유의미한 줄이
-#                    dist/**·docs/** 안에 통째로 재복제되지 않았는지 grep 검사.
-#                    B3 CI 승격 전 수동 실행 가능하도록 지금 도입한다(A-4 지시).
+#   --dup-scan      (default) risk-log A-4 required action — verifies B1/B2 AC1 "no
+#                    duplication" on the spot. greps whether meaningful lines of the
+#                    canonical sources (role/skill/command prose) have been re-copied
+#                    wholesale into dist/** or docs/**. Introduced now so it can be run
+#                    by hand before the B3 CI promotion (per A-4).
 #
-#   --check-copies          CF-B3 AC1 본체 — instruction-only 계층으로 "의도적으로"
-#                    복제된 규칙 텍스트(dist/copies-manifest.json에 등록된 항목만)의
-#                    drift를 검사한다. 짧은 복제=byte diff, 긴 본문=invariant 부분문자열.
-#                    등록된 복제가 0건이면 통과+안내(실패 아님 — B3 CONCERNS 명시 처리).
+#   --check-copies          The body of CF-B3 AC1 — checks drift in rule text that was
+#                    *deliberately* copied into the instruction-only layer (only entries
+#                    registered in dist/copies-manifest.json). Short copies=byte diff,
+#                    long bodies=invariant substrings. Zero registered copies means
+#                    pass + notice (not a failure — B3 CONCERNS, handled explicitly).
 #
-# 공통 관례: 기존 훅 5칙(project-context-kr.md §4-2) 중 ①②③ 계승
-#   ① SCRIPT_DIR -> BATHOS_ROOT 경로 해석
-#   ② jq 있으면 파싱, 없으면 보수적 grep 폴백
-#   ③ fail-safe: 검사 대상 자체가 없으면(디렉터리 부재 등) 통과 + 안내(과차단 금지)
+# Shared conventions: inherits (1)(2)(3) of the five hook rules (project-context-kr.md §4-2)
+#   (1) SCRIPT_DIR -> BATHOS_ROOT path resolution
+#   (2) parse with jq when available, else a conservative grep fallback
+#   (3) fail-safe: when there is nothing to check at all (missing directory, etc.), pass +
+#       notice (never over-block)
 #
-# exit: 0=문제 없음, 1=드리프트/중복 발견(무엇이 어디서 발견됐는지 + 다음 행동 포함)
+# exit: 0=no problem, 1=drift/duplication found (says what was found where + the next action)
 # =============================================================================
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BATHOS_ROOT="${BATHOS_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
-# 두 모드가 함께 쓰는 제외 목록 파일 — 모드 블록 밖(공용)에 둔다.
-# 주의: 이전에는 --check-copies 블록 안에서만 정의돼 있었다. --dup-scan 이 이 값을
-# 참조하게 되면서 그 위치로는 빈 값이 되어 제외가 조용히 무력화된다(set -u 로도
-# 안 잡히는 침묵 실패). 새 모드가 추가되어도 같은 함정에 빠지지 않도록 공용화한다.
+# The exclusions file both modes use — kept outside the mode blocks (shared).
+# Note: this used to be defined only inside the --check-copies block. Once --dup-scan began
+# referencing it, that placement left it empty and silently disabled the exclusions (a silent
+# failure that `set -u` does not catch either). Shared here so a new mode cannot fall into
+# the same trap.
 EXCLUSIONS_FILE="${BATHOS_DRIFT_EXCLUSIONS:-$SCRIPT_DIR/drift-exclusions.json}"
 
 MODE="dup-scan"
@@ -55,11 +59,11 @@ warn()  { printf '[bathos check-rule-copies] ! %s\n' "$*"; }
 error() { printf '[bathos check-rule-copies] ✗ %s\n' "$*"; FAIL=1; }
 ok()    { printf '[bathos check-rule-copies] ✓ %s\n' "$*"; }
 
-# --- canonical 소스 루트 해석 (제품 트리 우선, 없으면 원본 bathos/ 폴백) --------
-# LD-5: 최종 조립(Paul)이 끝나기 전에는 제품 트리에 .claude/agents 등이 아직
-# 존재하지 않을 수 있다(구현자는 변경분만 커밋). 이 경우 원본 bathos/를
-# read-only 참조로 폴백해 "포인터가 가리킬 대상이 결국 무엇인지" 검증한다.
-# 이 폴백은 임시이며 최종 조립 후에는 자동으로 제품 트리 경로가 우선된다.
+# --- Canonical source root (product tree first, else fall back to the original bathos/) ---
+# LD-5: before Paul's final assembly the product tree may not have .claude/agents yet
+# (implementers commit only their diffs). In that case fall back to the original bathos/ as a
+# read-only reference, to verify "what the pointers will ultimately resolve to".
+# This fallback is temporary; after final assembly the product-tree path automatically wins.
 resolve_canon_root() {
   if [[ -d "$BATHOS_ROOT/.claude/agents" ]]; then
     printf '%s\n' "$BATHOS_ROOT/.claude"
@@ -67,8 +71,8 @@ resolve_canon_root() {
   fi
   local orig="$BATHOS_ROOT/../../bathos/.claude"
   if [[ -d "$orig" ]]; then
-    # 주의: 이 함수는 $(...) 로 호출되므로 stdout은 오직 "경로 한 줄"만 담아야
-    # 한다. 진단 메시지는 반드시 stderr로 보낸다(stdout 오염 시 경로가 깨짐).
+    # Note: this function is called via $(...), so stdout must carry exactly one line — the
+    # path. Diagnostics must go to stderr (polluting stdout corrupts the path).
     printf '[bathos check-rule-copies] ! 제품 트리에 .claude/agents 없음 — 원본 bathos/.claude 폴백 검사 중(LD-5 최종 조립 전 임시 동작)\n' >&2
     printf '%s\n' "$(cd "$orig" && pwd)"
     return
@@ -83,10 +87,10 @@ if [[ "$MODE" == "dup-scan" ]]; then
     exit 0
   fi
 
-  # 스캔 대상 산문 파일: 역할(agents) · 스킬(skills/*/SKILL.md) · 커맨드(commands)
-  # 셋 다 존재를 보장하지 않는다(예: 원본 bathos/.claude엔 skills/가 아직 없음
-  # — bathos-debt 등은 이번 Dynamis에서 신설되는 스킬). 존재하는 디렉터리만 검사.
-  # 주의: mapfile은 bash4+ 전용(기존 훅 호환 관례상 bash 3.2/macOS 기본 지원 유지).
+  # Prose files to scan: roles (agents), skills (skills/*/SKILL.md), commands (commands).
+  # None of the three is guaranteed to exist (e.g. the original bathos/.claude has no skills/
+  # yet — bathos-debt and friends are new in Dynamis). Only existing directories are checked.
+  # Note: mapfile is bash 4+ only (hook-compat convention keeps bash 3.2/macOS working).
   CANON_DIRS=()
   for d in "$CANON_CLAUDE/agents" "$CANON_CLAUDE/skills" "$CANON_CLAUDE/commands"; do
     [[ -d "$d" ]] && CANON_DIRS+=("$d")
@@ -104,8 +108,9 @@ if [[ "$MODE" == "dup-scan" ]]; then
     exit 0
   fi
 
-  # 검사 표면: dist/, docs/ (매니페스트 JSON·본 표 자체의 짧은 인용구는 제외 —
-  # 아래 MIN_LEN 이상만 비교하므로 "짧은 인용/기호 설명"은 자연히 걸러진다)
+  # Surfaces to check: dist/, docs/ (short quotations in manifest JSON or in the tables
+  # themselves are out — only lines at or above MIN_LEN below are compared, so "short
+  # quotes / symbol glossaries" fall out naturally)
   SEARCH_DIRS=()
   [[ -d "$BATHOS_ROOT/dist" ]] && SEARCH_DIRS+=("$BATHOS_ROOT/dist")
   [[ -d "$BATHOS_ROOT/docs" ]] && SEARCH_DIRS+=("$BATHOS_ROOT/docs")
@@ -115,17 +120,18 @@ if [[ "$MODE" == "dup-scan" ]]; then
     exit 0
   fi
 
-  MIN_LEN=60   # 이 길이 미만 줄은 우연 일치 가능성이 높아 비교 제외(오탐 방지)
+  MIN_LEN=60   # Shorter lines match by coincidence too easily — excluded (avoids false positives)
   LINES_SCANNED=0
   DUPES_FOUND=0
 
-  # --- 제외 디렉터리 로드(암묵 제외 금지 — 파일로 명시, 사유 필수) -------------
-  # drift-exclusions.json 의 `dup_scan_excluded_dirs[]` 는 "검색 표면에서 통째로
-  # 뺄 디렉터리 접두사"다(같은 파일의 `exclusions[]` 와 의미가 다름 — 그쪽은
-  # --check-copies 가 쓰는 '등록된 복제본' 파일 경로다).
-  # 왜 필요한가: 포인터를 따라갈 수 없는 호스트(Codex)의 배포 번들은 산문을
-  # 자체 보유해야 하므로, CF-B1 의 "배포 표면은 포인터만" 전제가 성립하지 않는다(#33).
-  # jq 가 없으면 제외를 적용하지 않는다 — 검사가 더 엄격해지는 방향이므로 안전하다.
+  # --- Load excluded directories (no implicit exclusions — declared in a file, reason required)
+  # `dup_scan_excluded_dirs[]` in drift-exclusions.json holds "directory prefixes to drop
+  # from the search surface entirely" (a different meaning from `exclusions[]` in the same
+  # file — those are the 'registered copy' file paths used by --check-copies).
+  # Why it is needed: a distribution bundle for a host that cannot follow pointers (Codex)
+  # has to carry the prose itself, so CF-B1's "distribution surfaces hold pointers only"
+  # premise does not hold (#33).
+  # Without jq no exclusions are applied — that only makes the check stricter, so it is safe.
   DUP_EXCLUDED_DIRS=()
   if [[ -f "$EXCLUSIONS_FILE" ]] && command -v jq >/dev/null 2>&1; then
     while IFS= read -r p; do
@@ -136,7 +142,7 @@ if [[ "$MODE" == "dup-scan" ]]; then
     info "제외 디렉터리 ${#DUP_EXCLUDED_DIRS[@]}건 적용(사유는 $(basename "$EXCLUSIONS_FILE") 참조): ${DUP_EXCLUDED_DIRS[*]}"
   fi
 
-  # 히트 경로가 제외 접두사 아래인지 판정(BATHOS_ROOT 상대경로로 비교).
+  # Decides whether a hit path sits under an excluded prefix (compared BATHOS_ROOT-relative).
   _hit_excluded() {
     local hit_rel="${1#"$BATHOS_ROOT"/}"
     local d
@@ -147,7 +153,8 @@ if [[ "$MODE" == "dup-scan" ]]; then
   }
 
   for f in "${CANON_FILES[@]}"; do
-    # frontmatter(---)·헤딩(#)·표 구분선·공백줄 제외, MIN_LEN 이상 줄만 후보로.
+    # Skips frontmatter (---), headings (#), table rules and blank lines; only lines at or
+    # above MIN_LEN become candidates.
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       [[ "$line" =~ ^#+[[:space:]] ]] && continue
@@ -155,10 +162,11 @@ if [[ "$MODE" == "dup-scan" ]]; then
       [[ "${#line}" -lt "$MIN_LEN" ]] && continue
       LINES_SCANNED=$((LINES_SCANNED + 1))
       for d in "${SEARCH_DIRS[@]}"; do
-        # -F(고정문자열) -r(재귀) -l(파일명만): 정본 그대로의 산문 블록이
-        # 배포 표면에 그대로 박혀 있는지만 본다(부분 인용/의역은 오탐 방지 위해 무시).
+        # -F (fixed string) -r (recursive) -l (names only): looks only for a prose block
+        # embedded verbatim from the canonical file into a distribution surface (partial
+        # quotes/paraphrases are ignored to avoid false positives).
         hit="$(grep -F -r -l -- "$line" "$d" 2>/dev/null || true)"
-        # 제외 디렉터리 아래 히트는 버린다 — 남은 것이 없으면 위반이 아니다.
+        # Hits under an excluded directory are dropped — if none remain, it is no violation.
         if [[ -n "$hit" && "${#DUP_EXCLUDED_DIRS[@]}" -gt 0 ]]; then
           kept=""
           while IFS= read -r h; do
@@ -188,7 +196,7 @@ fi
 
 if [[ "$MODE" == "check-copies" ]]; then
   COPIES_MANIFEST="${BATHOS_COPIES_MANIFEST:-$BATHOS_ROOT/dist/copies-manifest.json}"
-  # EXCLUSIONS_FILE 은 스크립트 상단에서 공용으로 정의된다(두 모드가 공유).
+  # EXCLUSIONS_FILE is defined once at the top of the script (shared by both modes).
 
   if [[ ! -f "$COPIES_MANIFEST" ]]; then
     ok "copies-manifest.json 없음 — 검사 대상 0건(통과). 다음 행동: instruction-only 어댑터 추가 시 dist/copies-manifest.json에 등록하세요."
@@ -206,7 +214,7 @@ if [[ "$MODE" == "check-copies" ]]; then
     exit 0
   fi
 
-  # 제외 목록 로드(암묵 제외 금지 — 파일로 명시)
+  # Load the exclusions list (no implicit exclusions — declared in a file)
   is_excluded() {
     local rel="$1"
     [[ -f "$EXCLUSIONS_FILE" ]] || return 1
@@ -214,9 +222,10 @@ if [[ "$MODE" == "check-copies" ]]; then
   }
 
   norm() {
-    # fingerprint 정규화(간이판): 후행공백 제거 + CRLF->LF.
-    # 주의(CONCERNS): bathos-state의 단일 정규화 함수(Rust, Phillip 소유)와
-    # 별도 구현이다 — 언어 경계상 재사용 불가. 규칙만 동일하게 맞춤.
+    # fingerprint normalization (simplified): strip trailing whitespace + CRLF->LF.
+    # Note (CONCERNS): a separate implementation from bathos-state's single normalization
+    # function (Rust, owned by Phillip) — not reusable across the language boundary. Only
+    # the rules are kept identical.
     sed -e 's/\r$//' -e 's/[[:space:]]*$//' "$1"
   }
 
