@@ -26,6 +26,12 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BATHOS_ROOT="${BATHOS_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
+# 두 모드가 함께 쓰는 제외 목록 파일 — 모드 블록 밖(공용)에 둔다.
+# 주의: 이전에는 --check-copies 블록 안에서만 정의돼 있었다. --dup-scan 이 이 값을
+# 참조하게 되면서 그 위치로는 빈 값이 되어 제외가 조용히 무력화된다(set -u 로도
+# 안 잡히는 침묵 실패). 새 모드가 추가되어도 같은 함정에 빠지지 않도록 공용화한다.
+EXCLUSIONS_FILE="${BATHOS_DRIFT_EXCLUSIONS:-$SCRIPT_DIR/drift-exclusions.json}"
+
 MODE="dup-scan"
 for arg in "$@"; do
   case "$arg" in
@@ -113,6 +119,33 @@ if [[ "$MODE" == "dup-scan" ]]; then
   LINES_SCANNED=0
   DUPES_FOUND=0
 
+  # --- 제외 디렉터리 로드(암묵 제외 금지 — 파일로 명시, 사유 필수) -------------
+  # drift-exclusions.json 의 `dup_scan_excluded_dirs[]` 는 "검색 표면에서 통째로
+  # 뺄 디렉터리 접두사"다(같은 파일의 `exclusions[]` 와 의미가 다름 — 그쪽은
+  # --check-copies 가 쓰는 '등록된 복제본' 파일 경로다).
+  # 왜 필요한가: 포인터를 따라갈 수 없는 호스트(Codex)의 배포 번들은 산문을
+  # 자체 보유해야 하므로, CF-B1 의 "배포 표면은 포인터만" 전제가 성립하지 않는다(#33).
+  # jq 가 없으면 제외를 적용하지 않는다 — 검사가 더 엄격해지는 방향이므로 안전하다.
+  DUP_EXCLUDED_DIRS=()
+  if [[ -f "$EXCLUSIONS_FILE" ]] && command -v jq >/dev/null 2>&1; then
+    while IFS= read -r p; do
+      [[ -n "$p" ]] && DUP_EXCLUDED_DIRS+=("$p")
+    done < <(jq -r '.dup_scan_excluded_dirs[]?.path // empty' "$EXCLUSIONS_FILE" 2>/dev/null || true)
+  fi
+  if [[ "${#DUP_EXCLUDED_DIRS[@]}" -gt 0 ]]; then
+    info "제외 디렉터리 ${#DUP_EXCLUDED_DIRS[@]}건 적용(사유는 $(basename "$EXCLUSIONS_FILE") 참조): ${DUP_EXCLUDED_DIRS[*]}"
+  fi
+
+  # 히트 경로가 제외 접두사 아래인지 판정(BATHOS_ROOT 상대경로로 비교).
+  _hit_excluded() {
+    local hit_rel="${1#"$BATHOS_ROOT"/}"
+    local d
+    for d in "${DUP_EXCLUDED_DIRS[@]}"; do
+      [[ "$hit_rel" == "$d"/* || "$hit_rel" == "$d" ]] && return 0
+    done
+    return 1
+  }
+
   for f in "${CANON_FILES[@]}"; do
     # frontmatter(---)·헤딩(#)·표 구분선·공백줄 제외, MIN_LEN 이상 줄만 후보로.
     while IFS= read -r line; do
@@ -125,6 +158,16 @@ if [[ "$MODE" == "dup-scan" ]]; then
         # -F(고정문자열) -r(재귀) -l(파일명만): 정본 그대로의 산문 블록이
         # 배포 표면에 그대로 박혀 있는지만 본다(부분 인용/의역은 오탐 방지 위해 무시).
         hit="$(grep -F -r -l -- "$line" "$d" 2>/dev/null || true)"
+        # 제외 디렉터리 아래 히트는 버린다 — 남은 것이 없으면 위반이 아니다.
+        if [[ -n "$hit" && "${#DUP_EXCLUDED_DIRS[@]}" -gt 0 ]]; then
+          kept=""
+          while IFS= read -r h; do
+            [[ -z "$h" ]] && continue
+            _hit_excluded "$h" && continue
+            kept+="${kept:+$'\n'}$h"
+          done <<< "$hit"
+          hit="$kept"
+        fi
         if [[ -n "$hit" ]]; then
           DUPES_FOUND=$((DUPES_FOUND + 1))
           error "산문 재복제 의심: '${f#"$BATHOS_ROOT"/}' 의 한 줄이 다음에 그대로 존재함 -> $hit"
@@ -145,7 +188,7 @@ fi
 
 if [[ "$MODE" == "check-copies" ]]; then
   COPIES_MANIFEST="${BATHOS_COPIES_MANIFEST:-$BATHOS_ROOT/dist/copies-manifest.json}"
-  EXCLUSIONS_FILE="${BATHOS_DRIFT_EXCLUSIONS:-$SCRIPT_DIR/drift-exclusions.json}"
+  # EXCLUSIONS_FILE 은 스크립트 상단에서 공용으로 정의된다(두 모드가 공유).
 
   if [[ ! -f "$COPIES_MANIFEST" ]]; then
     ok "copies-manifest.json 없음 — 검사 대상 0건(통과). 다음 행동: instruction-only 어댑터 추가 시 dist/copies-manifest.json에 등록하세요."
