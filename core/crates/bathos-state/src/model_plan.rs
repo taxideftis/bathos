@@ -34,7 +34,8 @@ use std::path::Path;
 
 /// The only schema string this module writes. A file with a different (or missing) `schema`
 /// value is treated as **absent** (lenient — same as no file at all) rather than erroring, per
-/// `w2-panes-model-design-kr.md` §A1.2 "불일치 시 lenient 경고 후 무시하고 frontmatter 폴백".
+/// `w2-panes-model-design-kr.md` §A1.2 ("on mismatch, warn leniently, ignore the file, and
+/// fall back to frontmatter").
 pub const SCHEMA_ID: &str = "bathos/model-plan@1";
 
 /// The runtimes a role can be assigned to. `Copy`/`Eq` because resolve/validate compare these
@@ -124,7 +125,7 @@ impl Runtime {
 
 /// The **actual backend** the current Claude Code process is running under. Determined by
 /// `bathos model detect` inspecting `ANTHROPIC_BASE_URL` — this is a process-wide fact
-/// (`[실측 F2]` in the design doc: env-global vars are not per-teammate), never a per-role
+/// (`[measured F2]` in the design doc: env-global vars are not per-teammate), never a per-role
 /// choice. Mirrors [`Runtime`]'s env-global variants 1:1 (see [`Runtime::env_backend`]) but
 /// deliberately has **no** `Codex` variant: Codex is a subprocess, never "the backend this
 /// Claude Code process is running under".
@@ -144,7 +145,7 @@ impl SessionBackend {
     ///
     /// Host substrings come from the user-confirmed integration table (W5 task brief §3):
     /// `api.z.ai` (GLM), `api.moonshot.ai` (Kimi), `api.deepseek.com` (Deepseek). An
-    /// unrecognized/unset host falls back to `Claude` — lenient by design (§A1.1 "정직한 한계":
+    /// unrecognized/unset host falls back to `Claude` — lenient by design (§A1.1 "honest limits":
     /// a typo'd or future host must never silently become an *error*, only an
     /// under-detection).
     ///
@@ -301,10 +302,11 @@ fn plan_path(state_dir: &Path) -> std::path::PathBuf {
 /// Loads `<state_dir>/model-plan.json` leniently.
 ///
 /// - **Absent file** → `ModelPlan::empty()`, no warning (this is the expected steady state for
-///   every project that hasn't opted in — E1 "정상" case, not an error).
+///   every project that hasn't opted in — E1 "normal" case, not an error).
 /// - **Unparseable JSON** → `ModelPlan::empty()` + `W-MODELPLAN-CORRUPT` warning (E1).
 /// - **Parses but `schema` field mismatched/missing** → `ModelPlan::empty()` +
-///   `W-MODELPLAN-SCHEMA` warning (§A1.1 "불일치 시 lenient 경고 후 무시하고 frontmatter 폴백").
+///   `W-MODELPLAN-SCHEMA` warning (§A1.1 "on mismatch, warn leniently, ignore, fall back to
+///   frontmatter").
 /// - Otherwise the parsed plan is returned as-is.
 ///
 /// Never panics, never returns `Err` — this mirrors `bathos-inspect::loader`'s "only a truly
@@ -363,7 +365,8 @@ pub fn load(state_dir: &Path) -> (ModelPlan, Vec<PlanWarning>) {
 /// Whether an on-disk `model-plan.json` exists but is unparseable JSON (distinct from
 /// "well-formed but wrong schema" and from "absent"). `bathos model set` uses this to decide
 /// whether to back up the existing file to `.bak` before overwriting it (E1 second half:
-/// "set 시엔 .bak 백업 후 재생성 물음") — a schema-mismatch file is well-formed JSON and does
+/// "on set, back up to .bak, then ask before regenerating") — a schema-mismatch file is
+/// well-formed JSON and does
 /// not need this protection (overwriting it loses nothing unrecoverable-looking).
 pub fn is_corrupt_json(state_dir: &Path) -> bool {
     let path = plan_path(state_dir);
@@ -378,7 +381,7 @@ pub fn is_corrupt_json(state_dir: &Path) -> bool {
 ///
 /// Deliberately **no file lock**: unlike `manifest.json` (written by multiple concurrent
 /// engines/hooks), `model-plan.json` is written only by the lead's sequential `bathos model
-/// set/unset/detect` calls (§A1.3 "쓰기 주체는 `bathos model set` 단일 경로"). Adding a lock
+/// set/unset/detect` calls (§A1.3 "the single write path is `bathos model set`"). Adding a lock
 /// here would be complexity with no corresponding risk to mitigate — a deliberate simplicity
 /// call, not an oversight.
 pub fn save(state_dir: &Path, plan: &ModelPlan) -> std::io::Result<()> {
@@ -522,11 +525,11 @@ pub struct EffectiveModel {
 ///
 /// ```text
 /// effective(role, wave) =
-///   1. model-plan.roles[slug]         (존재·유효 시)
-///   2. model-plan.waves[wave]          (wave 지정 시, waves[wave].runtime != null일 때)
-///   3. model-plan.defaults             (defaults.model != null 시)
-///   4. agent frontmatter `model`       (현행 동작 — plan 부재/파손 시 여기로 폴백)
-///   5. 런타임 기본 (claude=세션 기본 모델)
+///   1. model-plan.roles[slug]         (if present and valid)
+///   2. model-plan.waves[wave]          (if a wave is given and waves[wave].runtime != null)
+///   3. model-plan.defaults             (if defaults.model != null)
+///   4. agent frontmatter `model`       (current behavior — fallback when the plan is absent/corrupt)
+///   5. runtime default                 (claude = the session's default model)
 /// ```
 ///
 /// `wave_id` is an **explicit** parameter rather than something this function infers on its
@@ -746,7 +749,7 @@ fn multi_env_global_resolutions(conflicting: &[&str]) -> Vec<String> {
 ///   that backend). A role with no plan entry at all (implicit claude via the runtime default)
 ///   does **not** trigger this — only an explicit, contradicted choice is a violation.
 /// - **Codex roles never block**: a separate process, no env conflict either direction
-///   (ADR-D-0006 "정직한 비대칭") — `is_env_global()` is `false` for `Codex`, so it's simply
+///   (ADR-D-0006 "honest asymmetry") — `is_env_global()` is `false` for `Codex`, so it's simply
 ///   never a candidate in Rule 1/2 and never `session_backend`'s value in Rule 3.
 ///
 /// `role_slugs` should be the wave's role roster (see `bathos_state::wave_roles`, sourced from
@@ -881,7 +884,7 @@ mod tests {
     #[test]
     fn resolve_step1_plan_role_wins_even_over_a_matching_wave_entry() {
         // roles[slug] is more specific than waves[wave] — it must win even when a wave policy
-        // for the same wave also exists (§4-5 "더 구체적인 것이 이김").
+        // for the same wave also exists (§4-5 "the more specific one wins").
         let mut plan = plan_with_role("phillip-backend-engineer", Runtime::Codex, None);
         plan.waves.insert(
             "W5".into(),
@@ -972,7 +975,7 @@ mod tests {
     #[test]
     fn resolve_step3_skipped_when_defaults_model_is_null() {
         // defaults.model == None → step 3 is a no-op even though defaults.runtime is set —
-        // this is the literal reading of "(defaults.model != null 시)" that keeps an empty
+        // this is the literal reading of "(if defaults.model != null)" that keeps an empty
         // plan behaviorally identical to no plan at all.
         let plan = ModelPlan::empty("Paul");
         let eff = resolve_effective(

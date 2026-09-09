@@ -1,14 +1,15 @@
 # =============================================================================
-# BATHOS Dynamis — drift-guard CI (스켈레톤, 실퍼블리시 아님)
-# CF-B3 / US7 AC3 — "드리프트 = CI 실패"를 로컬뿐 아니라 CI에서도 강제한다.
+# BATHOS Dynamis — drift-guard CI (a skeleton, not a real publish)
+# CF-B3 / US7 AC3 — enforces "drift = CI failure" in CI, not just locally.
 #
-# 주의(story-b3 §4 인계 메모): `.github/workflows/`는 Phillip이 심화하는
-# careful-guard(A1)의 "위험 경로" 후보에 포함될 수 있다. 본 워크플로는
-# Andrew 소유 경로(risk-log §C)로 스폰 시 명시 승인되었으나, careful-guard
-# 최종 규칙과 충돌 시 Phillip과 메시지 합의 필요(미해결 — 아래 impl-notes 참조).
+# Note (story-b3 §4 handover memo): `.github/workflows/` may end up among the "risky paths"
+# of the careful-guard (A1) that Phillip is deepening. This workflow was explicitly approved
+# at spawn time as a path owned by Andrew (risk-log §C), but if it conflicts with the final
+# careful-guard rules it must be agreed with Phillip by message (open — see impl-notes below).
 #
-# 이 워크플로는 기존 bathos/.github/workflows/ci.yml(Rust 엔진 CI, Phillip
-# 축A 소관)과 별개다 — 배포 레이어(축B) 전용 job만 담는다(소유 경계 준수).
+# This workflow is separate from the existing bathos/.github/workflows/ci.yml (the Rust engine
+# CI, Phillip's axis A) — it holds only distribution-layer (axis B) jobs, respecting the
+# ownership boundary.
 # =============================================================================
 name: drift-guard
 
@@ -58,9 +59,10 @@ jobs:
       - name: test-uninstall.sh (CF-B4 §5, 4 픽스처)
         run: bash dist/tests/test-uninstall.sh
 
-      # 이 값은 반드시 인용한다 — 인용 없는 YAML 스칼라에 ": "(콜론+공백)이 들어가면
-      # "mapping values are not allowed here"로 파싱이 실패하고, 워크플로가 job을
-      # 하나도 만들지 못한 채 0초에 죽는다(로그도 남지 않아 원인 추적이 어렵다). #32
+      # This value must stay quoted — an unquoted YAML scalar containing ": " (colon + space)
+      # fails to parse with "mapping values are not allowed here", and the workflow then dies
+      # at 0s without ever creating a job (and leaves no logs, which makes the cause hard to
+      # track down). #32
       - name: "test-check-rule-copies.sh (CF-B3 §5, 4 픽스처: byte/invariant/제외)"
         run: bash dist/tests/test-check-rule-copies.sh
 
