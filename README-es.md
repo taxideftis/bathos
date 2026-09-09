@@ -176,6 +176,20 @@ Dependencia de la línea principal: **W0 → W1 → W2 → W3 → W5 → W6**. W
 
 **Por qué W3 es el corazón.** La Ola 3 cierra la brecha de contexto entre diseño y construcción: el rol #17 **Matthew** condensa el trabajo previo en un **archivo de historia de dev autocontenido** (9 secciones, cada afirmación técnica etiquetada con `[Source: …]`), Thomas y Matthias lo revisan de forma independiente, y si el veredicto es `FAIL` el hook `gate-enforce` **bloquea físicamente** la entrada a W5.
 
+**Cómo construye W5 — la disciplina de implementación.** La Ola 5 se ejecuta sobre una **escalera** explícita que decide *qué* se construye. Antes de escribir código, quien implementa se detiene en el primer peldaño que aguanta: ① ¿necesita existir siquiera? → ② ¿ya está en esta base de código? → ③ ¿lo hace la biblioteca estándar? → ④ ¿lo cubre una función nativa de la plataforma? → ⑤ ¿lo resuelve una dependencia ya instalada? → ⑥ ¿cabe en una línea? → ⑦ solo entonces, el mínimo código que funciona.
+
+La escalera gobierna el **alcance**; ETHOS *Boil the Ocean* gobierna la **completitud** del alcance ya fijado. Los dos ejes nunca se recortan entre sí: la validación de entrada, el manejo de errores, la seguridad, la accesibilidad y la única comprobación ejecutable que acompaña a la lógica no trivial quedan explícitamente fuera del alcance de la escalera.
+
+Una simplificación que recorta una esquina real lleva un marcador que nombra su techo y su vía de salida:
+
+```rust
+// ponytail: single global lock, split into per-wave locks if profiling shows contention
+```
+
+`/bathos-debt` recolecta esos marcadores `ponytail:` del código fuente junto con las anclas `CONCERNS:` de los documentos, y señala como `no-trigger` todo marcador sin disparador de actualización — para que «más tarde» no se convierta silenciosamente en «nunca». La intensidad es un conmutador por sesión: `/bathos intensity <lite|full|ultra|off>` (por defecto `full`).
+
+Reglas: [`.claude/agents/_preamble/ponytail-inject-kr.md`](.claude/agents/_preamble/ponytail-inject-kr.md) — la edición coreana es la canónica, acompañada de las ediciones `-en` / `-ja` / `-es`.
+
 ---
 
 ## Enrutamiento adaptable a la escala (Lv0–4)
@@ -423,6 +437,8 @@ THE SOFTWARE.
 Nombramos este linaje por elección, no por obligación. Un sistema cuyo principio central es que *la generación debe seguir siendo responsable ante la verificación* se contradiría a sí mismo si ocultara el arte previo sobre el que se sostiene. Por eso BATHOS registra su deuda con BMAD-METHOD de forma clara y con genuino respeto — este trazó el terreno que BATHOS se propuso profundizar. De acuerdo con la Licencia MIT, el aviso de copyright y licencia de BMAD-METHOD se conservan en [`LICENSE`](LICENSE); el reconocimiento completo reside en [`CREDITS.md`](CREDITS.md).
 
 BATHOS es un proyecto separado e implementado de forma independiente y **no** usa las marcas «BMAD», «BMad Method», «BMad Builder», «BMB», «TEA», «CIS», «GDS» ni «WDS» en su nombre de producto ni en su marketing.
+
+**Disciplina de implementación (Ola 5).** La escalera de W5 adapta principios de ingeniería de **[ponytail](https://github.com/DietrichGebert/ponytail)** (MIT): la escalera con YAGNI en el primer peldaño, los límites de «cuándo no ser perezoso» y la convención de marcadores para simplificaciones diferidas. BATHOS absorbe *solo los principios*: la persona, el tono y la marca no se adoptan deliberadamente, y las reglas se reescribieron para el contexto de olas y roles, con una regla de precedencia explícita frente a ETHOS *Boil the Ocean*. Nuestro análisis inverso y la decisión de alcance quedan registrados en [`_recon/ponytail-analysis.md`](_recon/ponytail-analysis.md).
 
 ---
 

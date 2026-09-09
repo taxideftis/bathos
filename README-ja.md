@@ -176,6 +176,20 @@ echo '{"scope":"feature","novelty":true,"regulation_ip":false,"team_size":"mediu
 
 **なぜ W3 が心臓部なのか。** Wave 3 は設計→構築のコンテキストギャップを塞ぎます。ロール #17 **Matthew** が上流の作業を **自己完結型の dev ストーリーファイル** に凝縮し（9 セクション、あらゆる技術的主張に `[Source: …]` タグを付与）、Thomas と Matthias がそれを独立してレビューし、判定が `FAIL` の場合は `gate-enforce` フックが W5 への入場を **物理的にブロック** します。
 
+**W5 はどう作るのか — 実装規律。** Wave 5 は *何を作るか* を決める明示的な **ラダー（梯子）** の上で動きます。コードを書く前に、実装者は成立する最初の段で止まります: ① そもそも存在する必要があるか → ② このコードベースに既にあるか → ③ 標準ライブラリがやってくれるか → ④ プラットフォームのネイティブ機能が覆うか → ⑤ 既にインストール済みの依存が解決するか → ⑥ 一行で済むか → ⑦ その時点で初めて、動作する最小限のコード。
+
+ラダーは **スコープ** を支配し、ETHOS *Boil the Ocean* は決めたスコープの **完全性** を支配します。二つの軸が互いを削ることはありません — 入力検証・エラー処理・セキュリティ・アクセシビリティ、そして非自明なロジックの背後に残す実行可能な検証ひとつは、ラダーの射程外です。
+
+実際に角を落とした単純化には、その天井と脱出経路を明示するマーカーを残します:
+
+```rust
+// ponytail: single global lock, split into per-wave locks if profiling shows contention
+```
+
+`/bathos-debt` はソースコードの `ponytail:` マーカーをドキュメントの `CONCERNS:` アンカーと併せて収集し、アップグレードのトリガーを持たないマーカーを `no-trigger` として示します — 「後で」が静かに「永遠にやらない」にならないように。強度はセッション単位のトグルです: `/bathos intensity <lite|full|ultra|off>`（既定は `full`）。
+
+規律の正本: [`.claude/agents/_preamble/ponytail-inject-kr.md`](.claude/agents/_preamble/ponytail-inject-kr.md) — 韓国語版が正本であり、`-en` / `-ja` / `-es` 版を併置しています。
+
 ---
 
 ## スケール適応型ルーティング (Lv0–4)
@@ -423,6 +437,8 @@ THE SOFTWARE.
 私たちはこの系譜を、義務からではなく選択として明示します。*生成は検証に対して答責的であり続けねばならない* ことを中心的信条とするシステムが、自らが立脚する先行技術を覆い隠せば、自己矛盾に陥ります。ゆえに BATHOS は、BMAD-METHOD への負債を率直に、そして心からの敬意をもって記録します — それは BATHOS が深めようとした地形を切り拓きました。MIT License に従い、BMAD-METHOD の著作権とライセンス表示は [`LICENSE`](LICENSE) に保存されています; 完全な謝辞は [`CREDITS.md`](CREDITS.md) にあります。
 
 BATHOS は別個の、独立に実装されたプロジェクトであり、製品名やマーケティングにおいて商標「BMAD」、「BMad Method」、「BMad Builder」、「BMB」、「TEA」、「CIS」、「GDS」、「WDS」を使用**しません**。
+
+**実装規律（Wave 5）。** W5 のラダーは **[ponytail](https://github.com/DietrichGebert/ponytail)**（MIT）のエンジニアリング原則を取り入れています — YAGNI を先頭に置くラダー、「怠けてはいけないこと」の境界、そして先送りした単純化のマーカー規約です。BATHOS が吸収するのは *原則のみ* です: ペルソナ・トーン・ブランディングは意図的に採用せず、規則はウェーブ／ロールの文脈に合わせて書き直したうえで、ETHOS *Boil the Ocean* との優先順位ルールを明示しています。リバース分析とスコープの決定は [`_recon/ponytail-analysis.md`](_recon/ponytail-analysis.md) に記録されています。
 
 ---
 

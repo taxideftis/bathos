@@ -176,6 +176,20 @@ echo '{"scope":"feature","novelty":true,"regulation_ip":false,"team_size":"mediu
 
 **W3가 심장인 이유.** Wave 3은 설계→구축 컨텍스트 간극을 메웁니다. 역할 #17 **Matthew**가 상류 작업을 **자족 dev 스토리 파일**(9개 섹션, 모든 기술적 주장에 `[Source: …]` 태그)로 응축하고, Thomas와 Matthias가 이를 독립적으로 리뷰하며, 판정이 `FAIL`이면 `gate-enforce` 훅이 W5 진입을 **물리적으로 차단**합니다.
 
+**W5는 어떻게 만드는가 — 구현 규율.** Wave 5는 *무엇을 만들지*를 결정하는 명시적 **사다리** 위에서 돕니다. 코드를 쓰기 전, 구현자는 버티는 첫 단에서 멈춥니다: ① 애초에 존재해야 하는가 → ② 이 코드베이스에 이미 있는가 → ③ 표준 라이브러리가 하는가 → ④ 플랫폼 네이티브 기능이 덮는가 → ⑤ 이미 설치된 의존성이 푸는가 → ⑥ 한 줄로 되는가 → ⑦ 그제서야, 동작하는 최소한의 코드.
+
+사다리는 **스코프**를 지배하고, ETHOS *Boil the Ocean*은 정한 범위의 **완전성**을 지배합니다. 두 축은 서로를 자르지 않습니다 — 입력 검증·에러 처리·보안·접근성, 그리고 비자명한 로직 뒤에 남기는 실행 가능한 검증 하나는 사다리의 사정거리 밖입니다.
+
+실제 코너를 자른 단순화에는 그 천장과 탈출 경로를 명시하는 마커를 남깁니다:
+
+```rust
+// ponytail: single global lock, split into per-wave locks if profiling shows contention
+```
+
+`/bathos-debt`는 소스코드의 `ponytail:` 마커를 문서의 `CONCERNS:` 앵커와 함께 수집하고, 업그레이드 트리거가 없는 마커를 `no-trigger`로 표시합니다 — "나중에"가 조용히 "영영"이 되지 않도록. 강도는 세션 단위 토글입니다: `/bathos intensity <lite|full|ultra|off>`(기본 `full`).
+
+규율 정본: [`.claude/agents/_preamble/ponytail-inject-kr.md`](.claude/agents/_preamble/ponytail-inject-kr.md) — 한국어가 정본이며 `-en` / `-ja` / `-es` 판을 함께 둡니다.
+
 ---
 
 ## Scale-Adaptive 라우팅 (Lv0–4)
@@ -423,6 +437,8 @@ THE SOFTWARE.
 우리는 이 계보를 의무가 아니라 선택으로 밝힙니다. *생성은 검증에 답할 수 있어야 한다*는 것을 핵심 신조로 삼는 시스템이 자신이 딛고 선 선행 작업을 가린다면 스스로 모순에 빠질 것입니다. 그래서 BATHOS는 BMAD-METHOD에 진 빚을 분명하게, 그리고 진심 어린 존경과 함께 기록합니다 — 그것은 BATHOS가 더 깊이 파고들고자 한 지형을 개척했습니다. MIT License에 따라 BMAD-METHOD의 저작권 및 라이선스 고지는 [`LICENSE`](LICENSE)에 보존되며; 전체 감사의 글은 [`CREDITS.md`](CREDITS.md)에 있습니다.
 
 BATHOS는 별개의 독립 구현 프로젝트이며 제품명이나 마케팅에 "BMAD", "BMad Method", "BMad Builder", "BMB", "TEA", "CIS", "GDS", "WDS" 상표를 사용하지 **않습니다**.
+
+**구현 규율(Wave 5).** W5의 사다리는 **[ponytail](https://github.com/DietrichGebert/ponytail)**(MIT)의 엔지니어링 원칙을 차용했습니다 — YAGNI 우선 사다리, "게으르면 안 되는 것"의 경계, 그리고 유예된 단순화의 마커 규약. BATHOS는 *원칙만* 흡수합니다: 페르소나·톤·브랜딩은 의도적으로 도입하지 않았고, 규칙은 웨이브·역할 맥락에 맞게 재작성하면서 ETHOS *Boil the Ocean*과의 우선순위 규칙을 명시했습니다. 역분석과 범위 결정은 [`_recon/ponytail-analysis.md`](_recon/ponytail-analysis.md)에 기록돼 있습니다.
 
 ---
 
