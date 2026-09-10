@@ -125,7 +125,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bathos-cli"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bathos-gate-engine",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "bathos-gate-engine"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bathos-state",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "bathos-inspect"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bathos-state",
@@ -180,7 +180,7 @@ dependencies = [
 
 [[package]]
 name = "bathos-plug"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bathos-state",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "bathos-router"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bathos-state",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "bathos-state"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -225,11 +225,11 @@ dependencies = [
 
 [[package]]
 name = "bathos-story-compiler"
-version = "0.1.0"
+version = "0.4.0"
 
 [[package]]
 name = "bathos-story-engine"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bathos-gate-engine",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "bathos-tui"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "bathos-inspect",
  "crossterm",
@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "bathos-wave-engine"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bathos-router",

@@ -1,4 +1,4 @@
-# BATHOS 사용 가이드 (v0.1.0)
+# BATHOS 사용 가이드 (v0.4.0)
 
 > **BATHOS** — βάθος, 그리스어로 '깊이·심연'을 뜻한다. 표면을 훑는 지식의 정반대편에 서는 **압도적 깊이의 AI Workflow Agent 메서드 패키지**를 지향한다는 의미를 담았다.
 > Claude Code라는 단일 런타임 위에서 **17역할 × 7웨이브 × Scale-Adaptive Lv0~4** 구조로 제품 개발의 전 과정을 오케스트레이션한다.
@@ -491,10 +491,10 @@ W3 스토리엔진과 플러그가 참조하는, 한글로 일관되게 정리�
 
 ## 14. 현재 구현 상태 & 한계 (정직성 고지)
 
-**v0.1.0 — 이른 단계지만, 실제로 동작한다.** BATHOS는 오늘 end-to-end로 빌드되고 돌아간다. 채택을 고민하는 이들에게 정직하게 밝혀 둔다:
+**v0.4.0 — 이른 단계지만, 실제로 동작한다.** BATHOS는 오늘 end-to-end로 빌드되고 돌아간다. 채택을 고민하는 이들에게 정직하게 밝혀 둔다:
 
 - 이것은 **독립 실행 앱이 아니라 Claude Code v2.1.32+ 위에서 도는 메서드 패키지**이며, **실험 기능인 Agent Teams**에 의존한다.
-- **엔진은 검증됐다:** **Rust 테스트 257개 + 훅 결정성 46개가 전부 그린**, `clippy -D warnings` 클린, `cargo build --release` 재현 성공, 게이트 하드강제와 플러그 통합을 end-to-end로 확인했고, 코어의 모듈 비의존(A9)도 증명했다.
+- **엔진은 검증됐다:** **Rust 테스트 628개 + 훅 결정성 86개가 전부 그린**, `clippy -D warnings` 클린, `cargo build --release` 재현 성공, 게이트 하드강제와 플러그 통합을 end-to-end로 확인했고, 코어의 모듈 비의존(A9)도 증명했다.
 - **완전 독립 인증을 마쳤다(dogfooding):** BATHOS는 W6 독립 검증을 자기 자신의 코드에 그대로 적용했다. **ThomasCert(독립 코드 리뷰, PASS)와 MatthiasCert(독립 QA/E2E, PASS)** 두 인증이 모두 통과해 **Release Readiness = PASS(완전 독립 인증)**에 도달했다. 흥미로운 대목은, 기능 QA는 그린이었는데도 독립 코드리뷰가 **저자 스스로는 놓쳤던 차단성 불변식 결함**을 잡아냈다는 점이다 — Rust 엔진과 bash 훅이 같은 감사 체인에 서로 호환되지 않는 형식으로 기록해 tamper-evidence를 무력화하는 문제였다. 이는 보완·재게이트·백로그 소진을 거쳐 전건 해소됐다. 검증 trail: `.agent-team/`(`10-review/`·`11-qa/`·`12-report/w6-final-certification.html`·`_state/signoff.md`).
 - 일부 웨이브 커맨드는 완전 자동화된 엔진 플로우가 아니라, **리드가 직접 돌리는 오케스트레이션 프롬프트**(팀원 스폰·검수)다.
 - **아직 production-hardened 단계는 아니다** — 1.0 이전까지 API·스키마·커맨드명이 바뀔 수 있다.
@@ -509,5 +509,5 @@ BATHOS는 BMAD-METHOD(MIT © 2025 BMad Code, LLC)를 정밀 역분석한 뒤 제
 
 ---
 
-*문서 버전: v0.1.0 · 작성: 리드 Paul · 기준: 실제 빌드 산출물(B1~B4).*
+*문서 버전: v0.4.0 · 작성: 리드 Paul · 기준: 실제 빌드 산출물(B1~B4).*
 [USAGE-en](USAGE-en.md) · [USAGE-es](USAGE-es.md)

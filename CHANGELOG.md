@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-10
+
+Everything accumulated since 0.1.0 is released under this version. The 0.2.0 and
+0.3.0 numbers were used in build metadata and on the landing page but never carried
+a changelog section of their own, so their contents are folded in here.
+
 ### Added
 
 - **웨이브별 멀티 프로바이더 모델 선택 — Kimi·DeepSeek·Qwen 추가 + `waves.<W?>` 정책 배선**
@@ -214,5 +220,6 @@ First public release. BATHOS builds and runs end-to-end on Claude Code.
 - The final independent re-certification of the medium/low fix layer is lead-verified
   (an independent re-review attempt hung); independent re-cert is planned.
 
-[Unreleased]: https://github.com/your-org/bathos/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/your-org/bathos/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/your-org/bathos/compare/v0.1.0...v0.4.0
 [0.1.0]: https://github.com/your-org/bathos/releases/tag/v0.1.0

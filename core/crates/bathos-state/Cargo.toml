@@ -1,6 +1,6 @@
 [package]
 name    = "bathos-state"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 description = "BATHOS M1: manifest 도메인 모델, 상태 저장소(단일 쓰기·파일락), 감사 해시 체인"
 

@@ -2,7 +2,7 @@
 
 > **βάθος**(그리스어) — *"깊이·심연."* 표층적 AI 보조와 의도적으로 대비되는, 압도적 깊이의 AI Workflow Agent 메서드.
 >
-> 사용 가이드와 짝을 이루는 "왜, 그리고 어떻게" 문서라고 생각하면 된다. **BATHOS가 무엇이고(특징), 내부에서 실제로 어떻게 동작하는지(구동원리)** 를 풀어 설명한다. 전부 **실제 v0.1.0 빌드 기준**으로 썼다. 아래 메커니즘은 하나같이 구현·검증된 것이고, 한계가 있는 대목은 감추지 않고 그대로 밝힌다.
+> 사용 가이드와 짝을 이루는 "왜, 그리고 어떻게" 문서라고 생각하면 된다. **BATHOS가 무엇이고(특징), 내부에서 실제로 어떻게 동작하는지(구동원리)** 를 풀어 설명한다. 전부 **실제 v0.4.0 빌드 기준**으로 썼다. 아래 메커니즘은 하나같이 구현·검증된 것이고, 한계가 있는 대목은 감추지 않고 그대로 밝힌다.
 >
 > **함께 보기:** 이해보다 실행이 먼저라면 [사용 가이드](USAGE-kr.md)로 가면 된다. 운영 규칙은 [`../CLAUDE.md`](../CLAUDE.md), 그 바탕이 되는 원칙은 [`../ETHOS.md`](../ETHOS.md)에서 볼 수 있다. · English: [`FEATURES-en.md`](FEATURES-en.md) · Español: [`FEATURES-es.md`](FEATURES-es.md)
 
@@ -255,12 +255,12 @@ BATHOS는 Garry Tan의 **gstack** ETHOS를 차용·강화했다. 세 원칙이 �
 
 ---
 
-## 5. 프로젝트 상태 & 정직한 한계 (v0.1.0)
+## 5. 프로젝트 상태 & 정직한 한계 (v0.4.0)
 
 **Early but functional — 오늘 end-to-end로 빌드·동작한다.**
 
 - BATHOS는 **Claude Code v2.1.32+ 위에서 도는 메서드 패키지**이며 독립 실행 앱이 아니고, **실험 기능 Agent Teams**에 의존한다.
-- **엔진은 검증됨:** **Rust 테스트 257 + 훅 결정성 46, 전부 그린**; `cargo clippy -D warnings` 클린; release 재현 빌드.
+- **엔진은 검증됨:** **Rust 테스트 628 + 훅 결정성 86, 전부 그린**; `cargo clippy -D warnings` 클린; release 재현 빌드.
 - **완전 독립 인증(dogfooding):** BATHOS는 자기 자신에 Wave 6를 적용했다. **ThomasCert(독립 코드 리뷰, PASS) + MatthiasCert(독립 QA/E2E, PASS)** ⇒ **Release Readiness = PASS**. 알려진 Blocking/High/Medium 결함: **0 open**. 검증 trail: `.agent-team/`(`10-review/`·`11-qa/`·`12-report/w6-final-certification.html`·`_state/signoff.md`).
 - 일부 웨이브 커맨드는 리드가 Claude Code에서 돌리는 **오케스트레이션 프롬프트**(팀원 스폰·검수)이며 완전 자동 엔진 플로우가 아니다.
 - **아직 production-hardened 아님** — 1.0 전까지 API·스키마·커맨드명 변경 가능.
