@@ -220,6 +220,6 @@ First public release. BATHOS builds and runs end-to-end on Claude Code.
 - The final independent re-certification of the medium/low fix layer is lead-verified
   (an independent re-review attempt hung); independent re-cert is planned.
 
-[Unreleased]: https://github.com/your-org/bathos/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/your-org/bathos/compare/v0.1.0...v0.4.0
-[0.1.0]: https://github.com/your-org/bathos/releases/tag/v0.1.0
+[Unreleased]: https://github.com/taxideftis/bathos/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/taxideftis/bathos/compare/v0.1.0...v0.4.0
+[0.1.0]: https://github.com/taxideftis/bathos/releases/tag/v0.1.0
