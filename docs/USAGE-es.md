@@ -1,4 +1,4 @@
-# Guía de uso de BATHOS (v0.1.0)
+# Guía de uso de BATHOS (v0.4.0)
 
 > **BATHOS** — βάθος, que en griego significa 'profundidad; lo profundo'. El nombre expresa la aspiración a ser un **paquete de método de AI Workflow Agent de profundidad abrumadora**, situado en el extremo opuesto del conocimiento que solo roza la superficie.
 > Orquesta el proceso completo de desarrollo de producto sobre un único runtime — Claude Code — con la estructura **17 roles × 7 waves × Scale-Adaptive Lv0–4**.
@@ -471,10 +471,10 @@ Es decir, **incluso en otro proyecto y otra sesión**, lo aprendido en proyectos
 
 ## 14. Estado actual de implementación y límites (aviso de honestidad)
 
-**v0.1.0 — etapa temprana, pero funciona de verdad.** BATHOS hoy compila y corre end-to-end. Para quienes consideran adoptarlo, lo declaramos con honestidad:
+**v0.4.0 — etapa temprana, pero funciona de verdad.** BATHOS hoy compila y corre end-to-end. Para quienes consideran adoptarlo, lo declaramos con honestidad:
 
 - Esto **no es una app independiente sino un paquete de método que corre sobre Claude Code v2.1.32+**, y depende de la **funcionalidad experimental Agent Teams**.
-- **El motor está verificado:** **257 tests de Rust + 46 de determinismo de hooks, todos en verde**, `clippy -D warnings` limpio, `cargo build --release` reproducible; la imposición dura de gates y la integración de plugs se confirmaron end-to-end, y la no-dependencia del core respecto a módulos (A9) también quedó probada.
+- **El motor está verificado:** **628 tests de Rust + 86 de determinismo de hooks, todos en verde**, `clippy -D warnings` limpio, `cargo build --release` reproducible; la imposición dura de gates y la integración de plugs se confirmaron end-to-end, y la no-dependencia del core respecto a módulos (A9) también quedó probada.
 - **Certificación totalmente independiente completada (dogfooding):** BATHOS aplicó la verificación independiente de W6 a su propio código tal cual. Las dos certificaciones — **ThomasCert (revisión de código independiente, PASS) y MatthiasCert (QA/E2E independiente, PASS)** — pasaron, alcanzando **Release Readiness = PASS (certificación totalmente independiente)**. Lo interesante: aunque el QA funcional estaba en verde, la revisión de código independiente detectó un **defecto bloqueante de invariante que el propio autor había pasado por alto** — el motor Rust y los hooks bash escribían en la misma cadena de auditoría en formatos incompatibles, neutralizando la tamper-evidence. Se resolvió por completo tras corrección · re-gate · agotamiento del backlog. Trail de verificación: `.agent-team/` (`10-review/` · `11-qa/` · `12-report/w6-final-certification.html` · `_state/signoff.md`).
 - Algunos comandos de wave no son flujos de motor totalmente automatizados, sino **prompts de orquestación que el líder ejecuta directamente** (spawn/inspección de compañeros).
 - **Todavía no está en etapa production-hardened** — hasta 1.0, APIs, esquemas y nombres de comandos pueden cambiar.
@@ -489,5 +489,5 @@ BATHOS es un paquete implementado de forma independiente desde primeros principi
 
 ---
 
-*Versión del documento: v0.1.0 · Autor: el líder Paul · Base: artefactos de build reales (B1–B4).*
+*Versión del documento: v0.4.0 · Autor: el líder Paul · Base: artefactos de build reales (B1–B4).*
 [USAGE-kr](USAGE-kr.md) · [USAGE-en](USAGE-en.md)

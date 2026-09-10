@@ -1,4 +1,4 @@
-# BATHOS Usage Guide (v0.1.0)
+# BATHOS Usage Guide (v0.4.0)
 
 > **BATHOS** — βάθος, Greek for "depth; the deep." The name signals an ambition: an **AI Workflow Agent method package of overwhelming depth**, the exact opposite of knowledge that skims the surface.
 > On a single runtime — Claude Code — it orchestrates the entire product-development lifecycle with a **17-role × 7-wave × Scale-Adaptive Lv0–4** structure.
@@ -471,10 +471,10 @@ In other words, **even in a different project and a different session**, what wa
 
 ## 14. Current implementation status & limits (honesty notice)
 
-**v0.1.0 — early, but it actually works.** BATHOS builds and runs end-to-end today. For anyone weighing adoption, stated honestly:
+**v0.4.0 — early, but it actually works.** BATHOS builds and runs end-to-end today. For anyone weighing adoption, stated honestly:
 
 - This is **not a standalone app but a method package running on Claude Code v2.1.32+**, and it depends on the **experimental Agent Teams feature**.
-- **The engine is verified:** **257 Rust tests + 46 hook determinism tests, all green**, `clippy -D warnings` clean, `cargo build --release` reproduces successfully; gate hard-enforcement and plug integration were confirmed end-to-end, and the core's independence from modules (A9) was proven.
+- **The engine is verified:** **628 Rust tests + 86 hook determinism tests, all green**, `clippy -D warnings` clean, `cargo build --release` reproduces successfully; gate hard-enforcement and plug integration were confirmed end-to-end, and the core's independence from modules (A9) was proven.
 - **Fully independent certification completed (dogfooding):** BATHOS applied its own W6 independent verification to its own code. Both certifications — **ThomasCert (independent code review, PASS) and MatthiasCert (independent QA/E2E, PASS)** — passed, reaching **Release Readiness = PASS (fully independent certification)**. The interesting part: even though functional QA was green, the independent code review caught a **blocking invariant defect the author had missed** — the Rust engine and the bash hooks were writing to the same audit chain in mutually incompatible formats, neutralizing tamper-evidence. It was fully resolved via fix, re-gate, and backlog burn-down. Verification trail: `.agent-team/` (`10-review/` · `11-qa/` · `12-report/w6-final-certification.html` · `_state/signoff.md`).
 - Some wave commands are **orchestration prompts the lead runs directly** (spawning/inspecting teammates), not fully automated engine flows.
 - **Not production-hardened yet** — APIs, schemas, and command names may change before 1.0.
@@ -489,5 +489,5 @@ BATHOS is a package independently implemented from first principles after a care
 
 ---
 
-*Document version: v0.1.0 · Author: lead Paul · Basis: the actually built deliverables (B1–B4).*
+*Document version: v0.4.0 · Author: lead Paul · Basis: the actually built deliverables (B1–B4).*
 [USAGE-kr](USAGE-kr.md) · [USAGE-es](USAGE-es.md)

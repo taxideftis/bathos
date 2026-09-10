@@ -9,11 +9,11 @@
 
 > **βάθος** (Griechisch) — *„Tiefe, der Abgrund.“* Eine AI-Workflow-Agent-Methode mit überwältigender Tiefe, im bewussten Gegensatz zu oberflächlicher KI-Unterstützung.
 
-![version](https://img.shields.io/badge/version-0.2.0-0e9aa1)
+![version](https://img.shields.io/badge/version-0.4.0-0e9aa1)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![engine](https://img.shields.io/badge/engine-Rust-d2691e)
 ![runtime](https://img.shields.io/badge/runtime-Claude%20Code%20v2.1.32%2B-7b61ff)
-![status](https://img.shields.io/badge/status-v0.2.0%20early%20%C2%B7%20dogfood--verified-c8841a)
+![status](https://img.shields.io/badge/status-v0.4.0%20early%20%C2%B7%20dogfood--verified-c8841a)
 
 BATHOS verwandelt eine **einzelne Claude-Code-Sitzung in ein diszipliniertes Produktteam** — 17 Spezialistenrollen, eine 7-Wellen-Lieferpipeline, skalenadaptives Routing und harte Qualitäts-Gates — gestützt durch eine kleine **Rust-Engine**, die die kritischen Invarianten deterministisch macht statt nach Bauchgefühl.
 
@@ -358,7 +358,7 @@ Die Team-Artefakte, die ein Lauf erzeugt, liegen unter `.agent-team/` (Plan, Dis
 
 ## Projektstatus
 
-**v0.2.0 — früh, aber funktionsfähig.** BATHOS baut und läuft heute von Anfang bis Ende. Ehrliche Einschränkungen für Anwender:
+**v0.4.0 — früh, aber funktionsfähig.** BATHOS baut und läuft heute von Anfang bis Ende. Ehrliche Einschränkungen für Anwender:
 
 - Es ist ein **Methodenpaket, das auf Claude Code läuft**, keine eigenständige App, und hängt von der **experimentellen Agent-Teams**-Funktion ab.
 - Die Engine ist verifiziert: **510 Rust-Tests + 86 Hook-Determinismus-Prüfungen, alle grün**; `cargo clippy -D warnings` sauber; Release-Builds reproduzierbar.

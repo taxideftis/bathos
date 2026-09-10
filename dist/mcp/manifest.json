@@ -1,7 +1,7 @@
 {
   "name": "bathos-dynamis",
   "description": "BATHOS Dynamis — MCP 레퍼런스 채널 (read-only, 열화 계층 — 훅·게이트 강제 없음, 실행 표면 아님)",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "author": "BATHOS project",
   "_skeleton_note": "Should(CF-B6, LD-2 승격) 레퍼런스 구현. 실퍼블리시 아님 — 로컬 stdio 서버로만 실행(server.py). 인증/멀티테넌시 없음(카피 금지: open-swe FastAPI/OAuth).",
   "sources": {

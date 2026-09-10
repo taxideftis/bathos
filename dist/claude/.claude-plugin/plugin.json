@@ -1,7 +1,7 @@
 {
   "name": "bathos-dynamis",
   "description": "BATHOS Dynamis — 17역할 7웨이브 AI 오케스트레이션 + 심화 안전망 + 멀티런타임 배포 + 자기개선 서비스 레이어 (Claude Code 플러그인, 스켈레톤)",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "author": "BATHOS project",
   "_skeleton_note": "Must(CF-B1) 스켈레톤 — 실퍼블리시 아님(LD-2 Won't). sources/capability_tier는 Dynamis 자체 포인터 규약(비표준 확장 필드, 실제 Claude Code plugin.json 스키마의 표준 필드 여부는 (추정) — 호스트가 무시할 가능성이 높으나 미검증).",
   "sources": {

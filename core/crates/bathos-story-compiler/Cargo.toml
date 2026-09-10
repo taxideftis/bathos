@@ -1,6 +1,6 @@
 [package]
 name        = "bathos-story-compiler"
-version     = "0.1.0"
+version     = "0.4.0"
 edition     = "2021"
 description = "BATHOS 스토리파일 구조 검증 leaf 크레이트 — 의존 0 (ADR-P-0007)"
 

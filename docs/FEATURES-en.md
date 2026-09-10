@@ -2,7 +2,7 @@
 
 > **βάθος** (Greek) — *"depth; the deep."* An AI Workflow Agent method of overwhelming depth, deliberately positioned against surface-level AI assistance.
 >
-> Think of this as the "why, and how" companion to the usage guide. It explains **what BATHOS is (features) and how it actually works inside (mechanics)**. Everything here is written against the **actual v0.1.0 build** — every mechanism below is implemented and verified, and where there are limits, they are stated plainly rather than hidden.
+> Think of this as the "why, and how" companion to the usage guide. It explains **what BATHOS is (features) and how it actually works inside (mechanics)**. Everything here is written against the **actual v0.4.0 build** — every mechanism below is implemented and verified, and where there are limits, they are stated plainly rather than hidden.
 >
 > **See also:** If you'd rather run it than understand it first, go to the [usage guide](USAGE-en.md). Operating rules live in [`../CLAUDE.md`](../CLAUDE.md), and the principles behind them in [`../ETHOS.md`](../ETHOS.md). · 한국어: [`FEATURES-kr.md`](FEATURES-kr.md) · Español: [`FEATURES-es.md`](FEATURES-es.md)
 
@@ -255,12 +255,12 @@ These aren't decoration: the gate's "facilitator, not generator" rule and the in
 
 ---
 
-## 5. Project status & honest limits (v0.1.0)
+## 5. Project status & honest limits (v0.4.0)
 
 **Early but functional — it builds and runs end-to-end today.**
 
 - BATHOS is a **method package running on Claude Code v2.1.32+**, not a standalone app, and it depends on the **experimental Agent Teams feature**.
-- **The engine is verified:** **257 Rust tests + 46 hook determinism tests, all green**; `cargo clippy -D warnings` clean; reproducible release build.
+- **The engine is verified:** **628 Rust tests + 86 hook determinism tests, all green**; `cargo clippy -D warnings` clean; reproducible release build.
 - **Fully independent certification (dogfooding):** BATHOS applied Wave 6 to itself. **ThomasCert (independent code review, PASS) + MatthiasCert (independent QA/E2E, PASS)** ⇒ **Release Readiness = PASS**. Known Blocking/High/Medium defects: **0 open**. Verification trail: `.agent-team/` (`10-review/` · `11-qa/` · `12-report/w6-final-certification.html` · `_state/signoff.md`).
 - Some wave commands are **orchestration prompts the lead runs in Claude Code** (spawning/inspecting teammates), not fully automated engine flows.
 - **Not production-hardened yet** — APIs, schemas, and command names may change before 1.0.

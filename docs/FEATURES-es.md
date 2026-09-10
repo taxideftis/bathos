@@ -2,7 +2,7 @@
 
 > **βάθος** (griego) — *"profundidad; lo profundo."* Un método de AI Workflow Agent de profundidad abrumadora, posicionado deliberadamente en contraste con la asistencia de IA superficial.
 >
-> Piensa en este documento como el compañero de "por qué, y cómo" de la guía de uso. Explica **qué es BATHOS (características) y cómo funciona realmente por dentro (mecánica)**. Todo aquí está escrito contra el **build real v0.1.0** — cada mecanismo descrito está implementado y verificado, y donde hay límites, se declaran abiertamente en lugar de ocultarse.
+> Piensa en este documento como el compañero de "por qué, y cómo" de la guía de uso. Explica **qué es BATHOS (características) y cómo funciona realmente por dentro (mecánica)**. Todo aquí está escrito contra el **build real v0.4.0** — cada mecanismo descrito está implementado y verificado, y donde hay límites, se declaran abiertamente en lugar de ocultarse.
 >
 > **Ver también:** Si prefieres ejecutarlo antes que entenderlo, ve a la [guía de uso](USAGE-es.md). Las reglas de operación viven en [`../CLAUDE.md`](../CLAUDE.md), y los principios detrás de ellas en [`../ETHOS.md`](../ETHOS.md). · 한국어: [`FEATURES-kr.md`](FEATURES-kr.md) · English: [`FEATURES-en.md`](FEATURES-en.md)
 
@@ -255,12 +255,12 @@ No son decoración: la regla de gate "facilitator, no generator" y la separació
 
 ---
 
-## 5. Estado del proyecto y límites honestos (v0.1.0)
+## 5. Estado del proyecto y límites honestos (v0.4.0)
 
 **Early but functional — hoy compila y funciona end-to-end.**
 
 - BATHOS es un **paquete de método que corre sobre Claude Code v2.1.32+**, no una aplicación independiente, y depende de la **funcionalidad experimental Agent Teams**.
-- **El motor está verificado:** **257 tests de Rust + 46 de determinismo de hooks, todos en verde**; `cargo clippy -D warnings` limpio; build de release reproducible.
+- **El motor está verificado:** **628 tests de Rust + 86 de determinismo de hooks, todos en verde**; `cargo clippy -D warnings` limpio; build de release reproducible.
 - **Certificación totalmente independiente (dogfooding):** BATHOS aplicó Wave 6 a sí mismo. **ThomasCert (revisión de código independiente, PASS) + MatthiasCert (QA/E2E independiente, PASS)** ⇒ **Release Readiness = PASS**. Defectos Blocking/High/Medium conocidos: **0 abiertos**. Trail de verificación: `.agent-team/` (`10-review/` · `11-qa/` · `12-report/w6-final-certification.html` · `_state/signoff.md`).
 - Algunos comandos de wave son **prompts de orquestación** que el líder ejecuta en Claude Code (spawn/inspección de compañeros), no flujos de motor totalmente automáticos.
 - **Todavía no está production-hardened** — APIs, esquemas y nombres de comandos pueden cambiar antes de 1.0.

@@ -35,7 +35,7 @@ Ese es el punto — **generación ≠ verificación**. Los tests solo prueban lo
 Para un **paquete de dominio**, usa un plug — [`MODULE-GUIDE-es.md`](MODULE-GUIDE-es.md). Para cambiar *cómo se comportan los roles en tu proyecto*, usa overrides de team/user — [`ROLE-GUIDE-es.md`](ROLE-GUIDE-es.md). Mantén el core esbelto (invariante A9).
 
 ### ¿Está listo para producción?
-**Todavía no.** v0.1.0 es temprano pero funcional y validado por dogfooding (257 tests + 46 tests de hooks en verde, certificación totalmente independiente). APIs, esquemas y nombres de comandos pueden cambiar antes de 1.0. Hasta ahora solo se ha validado contra sí mismo — los pilotos externos reales son el siguiente hito.
+**Todavía no.** v0.4.0 es temprano pero funcional y validado por dogfooding (628 tests + 86 tests de hooks en verde, certificación totalmente independiente). APIs, esquemas y nombres de comandos pueden cambiar antes de 1.0. Hasta ahora solo se ha validado contra sí mismo — los pilotos externos reales son el siguiente hito.
 
 ### ¿Licencia? ¿Esto es BMAD?
 MIT. BATHOS fue implementado de forma independiente desde primeros principios tras un análisis inverso cuidadoso de [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD) (MIT © 2025 BMad Code, LLC), con sincero respeto por el trabajo previo en el que se apoya. No se usan las marcas de BMAD.

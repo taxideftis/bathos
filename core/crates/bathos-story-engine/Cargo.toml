@@ -1,6 +1,6 @@
 [package]
 name    = "bathos-story-engine"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 description = "BATHOS M5: W3 스토리엔진 (6단계 컴파일·staleness·SELECTIVE_LOAD·자가검증) [B3 구현 예정]"
 
