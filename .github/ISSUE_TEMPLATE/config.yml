@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Usage guide (Korean)
-    url: https://github.com/your-org/bathos/blob/main/docs/USAGE-kr.md
+    url: https://github.com/taxideftis/bathos/blob/prod/docs/USAGE-kr.md
     about: Detailed install, CLI, waves, hooks, and troubleshooting reference.
   - name: Discussions
-    url: https://github.com/your-org/bathos/discussions
+    url: https://github.com/taxideftis/bathos/discussions
     about: Questions, ideas, and show-and-tell. (Enable Discussions in repo settings.)
