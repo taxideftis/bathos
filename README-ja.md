@@ -9,11 +9,11 @@
 
 > **βάθος**（ギリシャ語）— *「深さ、深淵」。* 表層的な AI 支援とは意図的に対をなす、圧倒的な深さを備えた AI Workflow Agent メソッド。
 
-![version](https://img.shields.io/badge/version-0.2.0-0e9aa1)
+![version](https://img.shields.io/badge/version-0.4.0-0e9aa1)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![engine](https://img.shields.io/badge/engine-Rust-d2691e)
 ![runtime](https://img.shields.io/badge/runtime-Claude%20Code%20v2.1.32%2B-7b61ff)
-![status](https://img.shields.io/badge/status-v0.2.0%20early%20%C2%B7%20dogfood--verified-c8841a)
+![status](https://img.shields.io/badge/status-v0.4.0%20early%20%C2%B7%20dogfood--verified-c8841a)
 
 BATHOS は、**単一の Claude Code セッションを規律ある製品チームへと変える** — 17 の専門ロール、7 ウェーブのデリバリーパイプライン、スケール適応型ルーティング、そして厳格な品質ゲートを備え、その裏側では小さな **Rust エンジン** が重要な不変条件を「雰囲気」ではなく決定論的に成立させます。
 
@@ -372,7 +372,7 @@ bathos/
 
 ## プロジェクトの状態
 
-**v0.2.0 — 早期だが機能する。** BATHOS は今日、端から端までビルドされ動作します。導入者への正直な注意点。
+**v0.4.0 — 早期だが機能する。** BATHOS は今日、端から端までビルドされ動作します。導入者への正直な注意点。
 
 - これは **Claude Code 上で動くメソッドパッケージ** であり、スタンドアロンのアプリではなく、**実験的な Agent Teams** 機能に依存します。
 - エンジンは検証済み: **510 の Rust テスト + 86 のフック決定論性チェック、すべて green**; `cargo clippy -D warnings` はクリーン; リリースビルドは再現可能。

@@ -1,6 +1,6 @@
 [package]
 name    = "bathos-router"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 description = "BATHOS M2: Scale-Adaptive 라우터 (Lv0~4 ↔ wave-set/role-set 계산) — B2 구현"
 

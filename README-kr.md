@@ -9,11 +9,11 @@
 
 > **βάθος** (그리스어) — *"깊이, 심연."* 표층적인 AI 지원과는 의도적으로 대비되는, 압도적인 깊이를 지닌 AI Workflow Agent 메서드.
 
-![version](https://img.shields.io/badge/version-0.2.0-0e9aa1)
+![version](https://img.shields.io/badge/version-0.4.0-0e9aa1)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![engine](https://img.shields.io/badge/engine-Rust-d2691e)
 ![runtime](https://img.shields.io/badge/runtime-Claude%20Code%20v2.1.32%2B-7b61ff)
-![status](https://img.shields.io/badge/status-v0.2.0%20early%20%C2%B7%20dogfood--verified-c8841a)
+![status](https://img.shields.io/badge/status-v0.4.0%20early%20%C2%B7%20dogfood--verified-c8841a)
 
 BATHOS는 **단일 Claude Code 세션을 규율 잡힌 제품 팀으로** 바꿉니다 — 17개 전문 역할, 7웨이브 딜리버리 파이프라인, Scale-Adaptive 라우팅, 그리고 강력한 품질 게이트를 갖추고, 핵심 불변식을 감(感)이 아니라 결정론적으로 만들어 주는 작은 **Rust 엔진**이 이를 뒷받침합니다.
 
@@ -372,7 +372,7 @@ bathos/
 
 ## 프로젝트 상태
 
-**v0.2.0 — 초기이지만 작동함.** BATHOS는 오늘 처음부터 끝까지 빌드되고 실행됩니다. 도입자를 위한 정직한 유의 사항:
+**v0.4.0 — 초기이지만 작동함.** BATHOS는 오늘 처음부터 끝까지 빌드되고 실행됩니다. 도입자를 위한 정직한 유의 사항:
 
 - 이것은 **Claude Code 위에서 동작하는 메서드 패키지**이지 독립 실행 앱이 아니며, **실험적 Agent Teams** 기능에 의존합니다.
 - 엔진은 검증됐습니다: **510개 Rust 테스트 + 86개 훅 결정론 점검, 모두 green**; `cargo clippy -D warnings` 클린; 릴리스 빌드 재현 가능.

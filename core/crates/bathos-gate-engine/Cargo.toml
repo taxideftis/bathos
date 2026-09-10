@@ -1,6 +1,6 @@
 [package]
 name    = "bathos-gate-engine"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
 description = "BATHOS M4: 게이트 판정 엔진 (6단계 정렬검증·병렬리뷰·PASS/CONCERNS/FAIL) [B3 구현 예정]"
 
