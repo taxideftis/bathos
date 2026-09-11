@@ -133,6 +133,40 @@ JSON='{"tool_name":"Bash","tool_input":{"command":"psql -c \"TRUNCATE TABLE sess
 EC=$(run_hook "careful-guard.sh" "$JSON")
 assert_exit "[L-4] TRUNCATE TABLE sessions → 차단" 2 "$EC"
 
+# --- #39 케이스: git 플래그는 대소문자를 구분한다 (DANGER_PATTERNS_CS) ---
+# 종전에는 grep -Ei 가 배열 전체에 걸려 -b/-d 같은 안전 플래그까지 차단했다.
+
+# 1-16. git checkout -b (새 브랜치 생성) → 통과(exit 0)
+JSON='{"tool_name":"Bash","tool_input":{"command":"git checkout -b feature/login"}}'
+EC=$(run_hook "careful-guard.sh" "$JSON")
+assert_exit "[#39] git checkout -b (새 브랜치) → 통과" 0 "$EC"
+
+# 1-17. git checkout -B (기존 브랜치 강제 덮어쓰기) → 차단(exit 2)
+JSON='{"tool_name":"Bash","tool_input":{"command":"git checkout -B feature/login"}}'
+EC=$(run_hook "careful-guard.sh" "$JSON")
+assert_exit "[#39] git checkout -B (강제 덮어쓰기) → 차단" 2 "$EC"
+
+# 1-18. git branch -d (머지된 브랜치만 안전 삭제) → 통과(exit 0)
+JSON='{"tool_name":"Bash","tool_input":{"command":"git branch -d feature/login"}}'
+EC=$(run_hook "careful-guard.sh" "$JSON")
+assert_exit "[#39] git branch -d (안전 삭제) → 통과" 0 "$EC"
+
+# 1-19. git branch -D (강제 삭제) → 차단(exit 2)
+JSON='{"tool_name":"Bash","tool_input":{"command":"git branch -D feature/login"}}'
+EC=$(run_hook "careful-guard.sh" "$JSON")
+assert_exit "[#39] git branch -D (강제 삭제) → 차단" 2 "$EC"
+
+# 1-20. git clean -f → 여전히 차단(exit 2) [CS 배열 이전 후 회귀 확인]
+JSON='{"tool_name":"Bash","tool_input":{"command":"git clean -f"}}'
+EC=$(run_hook "careful-guard.sh" "$JSON")
+assert_exit "[#39] git clean -f → 차단(CS 이전 회귀)" 2 "$EC"
+
+# 1-21. 소문자 SQL → 여전히 차단(exit 2)
+#   CS 분리의 핵심 제약: -i 를 전역으로 빼면 이 케이스를 놓친다. SQL 은 -i 를 유지해야 한다.
+JSON='{"tool_name":"Bash","tool_input":{"command":"psql -c \"drop table users\""}}'
+EC=$(run_hook "careful-guard.sh" "$JSON")
+assert_exit "[#39] 소문자 drop table → 차단(-i 유지 확인)" 2 "$EC"
+
 # --------------------------------------------------------------------------
 # 2. freeze-guard.sh 테스트
 # --------------------------------------------------------------------------
