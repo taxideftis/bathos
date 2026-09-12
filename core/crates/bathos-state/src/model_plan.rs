@@ -649,7 +649,11 @@ pub struct MixViolation {
 /// `assets/model-catalog.json` (the lead's model catalog already carries `env.ANTHROPIC_BASE_URL`
 /// per provider, plus `url_is_templated`/`regions[]` for Qwen specifically) once this crate is
 /// allowed to depend on runtime asset I/O for a CLI-only display string.
-fn env_endpoint_hint(runtime: Runtime) -> &'static str {
+///
+/// Promoted from private to `pub` for `bathos model switch` (story M4): the Tier-R
+/// copy-paste command generator reuses this as the **single source of truth** for endpoint
+/// text — the wording is frozen by contract ("문안 변경 금지"), only visibility changed.
+pub fn env_endpoint_hint(runtime: Runtime) -> &'static str {
     match runtime {
         Runtime::Glm => "https://api.z.ai/api/anthropic (scripts/glm-env.sh 존재)",
         Runtime::Kimi => "https://api.moonshot.ai/anthropic",
@@ -676,7 +680,11 @@ fn env_endpoint_hint(runtime: Runtime) -> &'static str {
 /// instruction is worse than a vague one (it actively misleads), so this small mapping exists
 /// specifically to keep resolution #3 below correct per-provider instead of copy-pasting one
 /// var name for all four.
-fn env_auth_var(runtime: Runtime) -> &'static str {
+///
+/// Promoted from private to `pub` for `bathos model switch` (story M4): the Tier-R raw
+/// `export` line names the auth var per runtime — same frozen-wording, visibility-only
+/// change as [`env_endpoint_hint`].
+pub fn env_auth_var(runtime: Runtime) -> &'static str {
     match runtime {
         Runtime::Deepseek => "ANTHROPIC_API_KEY",
         Runtime::Glm | Runtime::Kimi | Runtime::Qwen => "ANTHROPIC_AUTH_TOKEN",
