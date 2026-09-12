@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 # =============================================================================
-# BATHOS  scripts/bathos-panes.sh  —  tmux Wave 패널 프론트엔드 (B3, ADR-D-0007/0009)
+# BATHOS  scripts/bathos-panes.sh  —  tmux Wave panel frontend (B3, ADR-D-0007/0009)
 #
-# 사용:
-#   bathos-panes.sh up      [--project <절대경로>] [--waves "W2 W5"] [--interval 2]
-#   bathos-panes.sh attach  [--project <절대경로>]
-#   bathos-panes.sh down    [--project <절대경로>]
-#   bathos-panes.sh status  [--project <절대경로>]
+# Usage:
+#   bathos-panes.sh up      [--project <abs-path>] [--waves "W2 W5"] [--interval 2]
+#   bathos-panes.sh attach  [--project <abs-path>]
+#   bathos-panes.sh down    [--project <abs-path>]
+#   bathos-panes.sh status  [--project <abs-path>]
 #
-# exit 0=성공 / 1=실행 실패 / 3=E-TMUX-ABSENT / 4=E-BATHOS-ABSENT
+# exit 0=success / 1=run failure / 3=E-TMUX-ABSENT / 4=E-BATHOS-ABSENT
 #
-# 무엇을 하는가: `bathos inspect vm --format lines`(bathos-inspect DashboardVM, ADR-D-0007)
-# 하나의 데이터원을 tmux 분할 패널에 2초 간격으로 렌더링하고, 패널에서 입력한
-# confirm/feedback/answer를 `_state/panes/inbox/`에 파일로 흘린다(ADR-D-0009). 게이트
-# 정본 기록은 여전히 `bathos gate`(웨이브 흐름) — 이 패널의 confirm은 "제안 채널"이다.
+# What it does: takes one single data source, `bathos inspect vm --format lines`
+# (bathos-inspect DashboardVM, ADR-D-0007), renders it into split tmux panes every 2s, and
+# streams the confirm/feedback/answer typed in a pane into `_state/panes/inbox/` as files
+# (ADR-D-0009). The canonical gate record is still `bathos gate` (the wave flow) — this panel's confirm is a "proposal channel".
 #
-# 왜 파일 기반 입력인가: 팀원(Claude Code 서브에이전트)에는 TTY가 없다 — 이 스크립트는
-# **사람이 여는 두 번째 터미널**의 관측/입력 도구다(F9). Paul(리드) 자신의 세션이 이
-# 스크립트를 자동 기동하지 않는 이유도 같다(자기 TTY를 이미 점유 중).
+# Why file-based input: teammates (Claude Code subagents) have no TTY — this script is the
+# observe/input tool for **a second terminal that a human opens** (F9). It is also why Paul's
+# (the lead's) own session does not auto-start this script: it already occupies its own TTY.
 #
-# 이식성: bash 3.2(macOS 기본) 호환 — mapfile/연관배열(`declare -A`)/`${var,,}`/`&>` 금지.
-# jq 금지 — `bathos inspect vm --format lines`의 TSV를 awk/grep/cut/read로만 소비한다.
-# Windows 네이티브는 tmux가 없어 미지원 — WSL(`scripts/wsl-setup.sh`) 또는
-# `bathos panes --mode tui`(§B4, crossterm)를 대신 쓴다.
+# Portability: bash 3.2 compatible (the macOS default) — mapfile / associative arrays (`declare -A`) / `${var,,}` / `&>` are banned.
+# No jq — the TSV from `bathos inspect vm --format lines` is consumed with awk/grep/cut/read only.
+# Native Windows is unsupported because it has no tmux — use WSL (`scripts/wsl-setup.sh`) or
+# `bathos panes --mode tui` (§B4, crossterm) instead.
 # =============================================================================
 set -uo pipefail
 
@@ -110,7 +110,7 @@ EOF
 }
 
 # --------------------------------------------------------------------------
-# 0. bathos 바이너리 탐색 (codex-adapter/hooks/pretooluse-gate.sh와 동일 순서)
+# 0. locate the bathos binary (same order as codex-adapter/hooks/pretooluse-gate.sh)
 # --------------------------------------------------------------------------
 find_bathos_bin() {
   local project="$1"
@@ -324,7 +324,7 @@ case "$CMD" in
 esac
 
 # --------------------------------------------------------------------------
-# 2. 공통 인자 파싱 (up/attach/down/status)
+# 2. shared argument parsing (up/attach/down/status)
 # --------------------------------------------------------------------------
 PROJECT="$(pwd)"
 WAVES_ARG=""
@@ -357,7 +357,7 @@ AGENT_TEAM="$PROJECT/.agent-team"
 PANES_DIR="$AGENT_TEAM/_state/panes"
 
 # --------------------------------------------------------------------------
-# 3. 프리플라이트 — tmux · bathos 바이너리
+# 3. preflight — tmux · the bathos binary
 # --------------------------------------------------------------------------
 if ! command -v tmux >/dev/null 2>&1; then
   err "tmux가 설치돼 있지 않습니다(E-TMUX-ABSENT)."
@@ -375,7 +375,7 @@ BATHOS_BIN_RESOLVED="$(find_bathos_bin "$PROJECT")" || {
 }
 
 # --------------------------------------------------------------------------
-# 4. 세션명 — bathos-<project_id> (jq 금지: grep으로 manifest.json에서 직접 추출)
+# 4. session name — bathos-<project_id> (no jq: grep it straight out of manifest.json)
 # --------------------------------------------------------------------------
 MANIFEST="$AGENT_TEAM/_state/manifest.json"
 PROJECT_ID=""
@@ -390,13 +390,13 @@ mkdir -p "$PANES_DIR/inbox" "$PANES_DIR/processed"
 
 session_exists() { tmux has-session -t "$SESSION" 2>/dev/null; }
 
-# stale session.info 정리(has-session과 불일치하면 재생성 대상 — E8/멱등성)
+# Clear a stale session.info (if it disagrees with has-session it must be recreated — E8/idempotency)
 if [ -f "$PANES_DIR/session.info" ] && ! session_exists; then
   rm -f "$PANES_DIR/session.info"
 fi
 
 # --------------------------------------------------------------------------
-# 5. 웨이브 자동 선택 (--waves 미지정 시)
+# 5. automatic wave selection (when --waves is not given)
 # --------------------------------------------------------------------------
 select_waves() {
   if [ -n "$WAVES_ARG" ]; then
@@ -423,7 +423,7 @@ select_waves() {
 }
 
 # --------------------------------------------------------------------------
-# 6. 커맨드 구현
+# 6. command implementations
 # --------------------------------------------------------------------------
 case "$CMD" in
   up)
@@ -487,7 +487,7 @@ case "$CMD" in
       say "이미 종료 상태: $SESSION"
     fi
     rm -f "$PANES_DIR/session.info"
-    # wave-log.md는 리드 소유 — 종료 스탬프는 별도 파일에만 남긴다(소유권 침범 금지).
+    # wave-log.md belongs to the lead — the close stamp goes into a separate file only (no ownership trespass).
     printf 'closed %s session=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SESSION" \
       >> "$PANES_DIR/session.info.last" 2>/dev/null || true
     # PANES-004: this file accumulates across every `down` invocation via append (`>>`, not a

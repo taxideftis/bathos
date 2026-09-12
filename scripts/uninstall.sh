@@ -1,40 +1,40 @@
 #!/usr/bin/env bash
 # =============================================================================
 # BATHOS Dynamis — scripts/uninstall.sh
-# CF-B4 / SS11 (Should) — 플러그인 폴더 "밖" 외부 상태 정리 1급 스크립트.
+# CF-B4 / SS11 (Should) — first-class script for cleaning up external state "outside" the plugin folder.
 #
-# ★★★ 실행순서 계약(핵심 엣지케이스, ponytail 확인 사실) ★★★
-#   호스트의 플러그인 제거 명령은 이 스크립트 파일 자체를 먼저 지운다.
-#   반드시 "호스트 제거 명령보다 먼저" 이 스크립트를 실행해야 한다.
-#   (스크립트가 이미 사라진 뒤라면 아래 §README "수동 정리 경로"를 따를 것 —
-#    docs/uninstall-kr.md 참조)
+# ★★★ Execution-order contract (the key edge case, confirmed on ponytail) ★★★
+#   The host's plugin-removal command deletes this script file itself first.
+#   So this script must always be run "before the host removal command".
+#   (If the script is already gone, follow §README "manual cleanup path" below —
+#    see docs/uninstall-kr.md)
 #
-# 정리 대상(명시적 목록 — 암묵 글롭 삭제 금지, careful 정신 계승):
-#   1. ${BATHOS_STATE_DIR}/session-flags.json   (plan_mode/intensity 세션 플래그)
-#   2. ${BATHOS_HOME}/.claude/settings.json 의 statusLine 엔트리
-#      (bathos 관련 엔트리만 정밀 제거 — 파일 전체 재작성 금지, .bak 백업 후 수정)
-#   3. ${BATHOS_CONFIG_DIR}/*                   (존재 시에만 — 전역 설정 잔여물)
+# Cleanup targets (an explicit list — no implicit glob deletion, inheriting the careful spirit):
+#   1. ${BATHOS_STATE_DIR}/session-flags.json   (plan_mode/intensity session flags)
+#   2. the statusLine entry inside ${BATHOS_HOME}/.claude/settings.json
+#      (surgically remove only bathos-related entries — never rewrite the whole file; edit after a .bak backup)
+#   3. ${BATHOS_CONFIG_DIR}/*                   (only when it exists — global-config leftovers)
 #
-# 명시적으로 건드리지 않는 것(SSOT 보호):
-#   - _state/manifest.json (프로젝트 SSOT, 삭제 대상 아님)
-#   - _state/audit-log.jsonl (append-only 감사 이력, 삭제 대상 아님)
+# Explicitly never touched (protecting the SSOT):
+#   - _state/manifest.json (the project SSOT, not a deletion target)
+#   - _state/audit-log.jsonl (append-only audit history, not a deletion target)
 #
-# UX 규약(ux-flow-map Flow C, design-handoff §2-4 그대로 구현):
-#   - dry-run 기본(인자 없으면 계획만 출력)
-#   - 파괴적 실행 앞단 강한 경고 + 항목별 결과 로그
-#   - `y/N`(기본 N) 또는 `--yes`
-#   - 부분 실패는 성공/실패를 분리 표기(전체를 죽이지 않음)
-#   - 완료 후 "다음 행동" 안내(막다른 골목 금지)
+# UX contract (implements ux-flow-map Flow C and design-handoff §2-4 as written):
+#   - dry-run by default (with no arguments it only prints the plan)
+#   - a strong warning ahead of the destructive run + a per-item result log
+#   - `y/N` (defaults to N) or `--yes`
+#   - partial failure is reported as separate success/failure counts (it does not kill the whole run)
+#   - a "next action" hint once finished (no dead ends)
 #
-# exit: 0=정상 완료(dry-run 포함), 1=사용자 취소 또는 부분 실패 존재
+# exit: 0=finished normally (dry-run included), 1=user cancelled, or partial failures exist
 # =============================================================================
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BATHOS_ROOT="${BATHOS_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
-# 테스트 가능성을 위해 전부 환경변수로 오버라이드 가능(기존 훅 관례 계승 —
-# 실제 $HOME을 건드리지 않고 픽스처로 검증할 수 있어야 한다).
+# All of these are overridable by env var for testability (inheriting the existing hook
+# convention — it has to be verifiable with fixtures without touching the real $HOME).
 BATHOS_STATE_DIR="${BATHOS_STATE_DIR:-$BATHOS_ROOT/_state}"
 BATHOS_HOME="${BATHOS_HOME:-$HOME}"
 BATHOS_CONFIG_DIR="${BATHOS_CONFIG_DIR:-$BATHOS_HOME/.config/bathos}"
@@ -68,7 +68,7 @@ failmsg(){ printf '%s ✗ %s\n' "$PREFIX" "$*"; }
 warn "되돌릴 수 없음 — 호스트의 플러그인 제거 명령보다 먼저 이 스크립트를 실행하세요."
 warn "  (호스트 제거가 먼저 실행되면 이 스크립트 파일 자체가 함께 삭제됩니다.)"
 
-# --- 대상 계획 수립 ----------------------------------------------------------
+# --- Build the target plan ---------------------------------------------------
 declare -a PLAN_DESC=()
 declare -a PLAN_KIND=()   # file | jsonkey | dircontents
 declare -a PLAN_PATH=()
@@ -122,7 +122,7 @@ if [[ "$ASSUME_YES" -ne 1 ]]; then
   esac
 fi
 
-# --- 실제 삭제 실행 -----------------------------------------------------------
+# --- Perform the actual deletion ----------------------------------------------
 SUCCESS=0
 FAILED=0
 
@@ -140,8 +140,8 @@ remove_file() {
 remove_dir_contents() {
   local dir="$1"
   local any_fail=0
-  # 암묵 글롭 전체삭제(rm -rf) 대신 항목 단위로 순회(careful 정신 — 개별 실패가
-  # 전체를 죽이지 않도록, 그리고 careful-guard의 광범위 삭제 차단과도 정합).
+  # Walk entry by entry instead of an implicit whole-glob delete (rm -rf) — the careful spirit:
+  # a single failure must not kill the rest, and it matches careful-guard's block on broad deletes.
   local entry
   for entry in "$dir"/* "$dir"/.[!.]*; do
     [[ -e "$entry" ]] || continue
@@ -164,7 +164,7 @@ remove_statusline_key() {
     return
   fi
 
-  # bathos 관련 엔트리인지 확인(무관한 statusLine 설정을 실수로 지우지 않기 위함).
+  # Confirm the entry really is bathos-related (so an unrelated statusLine setting is never wiped by mistake).
   local is_bathos
   is_bathos="$(jq -r '(.statusLine.command // "") | test("bathos"; "i")' "$path" 2>/dev/null || echo false)"
   if [[ "$is_bathos" != "true" ]]; then

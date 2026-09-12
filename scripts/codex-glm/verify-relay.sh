@@ -13,7 +13,7 @@
 # liveness check", not "connection verified". What this script checks:
 #   1. codex-relay binary is on PATH (or a path was given).
 #   2. relay-config.toml.example has the required TOML keys (grep, no jq —
-#      this repo's bash-3.2/no-jq convention, code-structure.md#레이어경계).
+#      this repo's bash-3.2/no-jq convention, code-structure.md §layer boundaries).
 #   3. IF a relay happens to already be running locally, its /v1/models
 #      endpoint is reachable — this only proves "a proxy is listening", not
 #      "GLM behind it is reachable/authenticated". No API key is read, sent,

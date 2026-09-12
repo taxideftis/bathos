@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# BATHOS  scripts/_test-bathos-panes.sh  —  tmux 헤드리스 스모크 테스트 (T7)
+# BATHOS  scripts/_test-bathos-panes.sh  —  headless tmux smoke test (T7)
 #
-# 실제 사용자 없이 `bathos-panes.sh`의 핵심 계약만 검증한다:
-#   1) __control 서브커맨드가 "confirm <W> <VERDICT> <사유>" 입력을 받아
-#      inbox/confirm-<W>-*.txt 파일을 실제로 생성하는가(내용까지)
-#   2) __input 서브커맨드도 동일 계약을 지키는가(웨이브별 입력 pane)
-#   3) 자유서술 입력은 feedback-*.md로 떨어지는가
-#   4) up의 프리플라이트(E-TMUX-ABSENT/E-BATHOS-ABSENT)가 실제로 정확한 exit code를 내는가
+# Verifies only the core contracts of `bathos-panes.sh`, with no real user present:
+#   1) does the __control subcommand take a "confirm <W> <VERDICT> <reason>" input
+#      and really create inbox/confirm-<W>-*.txt (contents included)?
+#   2) does the __input subcommand honour the same contract (per-wave input pane)?
+#   3) does free-form input land in feedback-*.md?
+#   4) does up's preflight (E-TMUX-ABSENT/E-BATHOS-ABSENT) really return the exact exit code?
 #
-# tmux가 없는 CI 환경에서도 죽지 않도록 SKIP(exit 0)한다 — 이 프로젝트의 fail-safe 관례
-# (codex-adapter/hooks/_test-codex-hooks.sh와 동일 원칙: 도구 부재는 실패가 아니다).
+# SKIPs (exit 0) instead of dying in CI environments without tmux — this project's
+# fail-safe convention (like codex-adapter/hooks/_test-codex-hooks.sh: an absent tool is not a failure).
 #
-# 실행: bash scripts/_test-bathos-panes.sh
+# Run: bash scripts/_test-bathos-panes.sh
 # =============================================================================
 set -uo pipefail
 
@@ -127,8 +127,8 @@ tmux kill-session -t "$SESSION3" >/dev/null 2>&1 || true
 printf '\n== T8-lite: up 프리플라이트 — E-BATHOS-ABSENT(exit 4) ==\n'
 EMPTY_PROJECT="$WORK/empty-project"
 mkdir -p "$EMPTY_PROJECT"
-# tmux가 있는 디렉터리는 남기되(E-TMUX-ABSENT 아닌 E-BATHOS-ABSENT를 유도해야 하므로),
-# bathos 바이너리는 어디서도 못 찾도록 PATH를 좁힌다(BATHOS_BIN도 비움).
+# Keep tmux's directory on PATH (we must trigger E-BATHOS-ABSENT, not E-TMUX-ABSENT),
+# but narrow PATH so the bathos binary is nowhere to be found (BATHOS_BIN cleared too).
 TMUX_DIR="$(dirname "$(command -v tmux)")"
 if env -i PATH="/usr/bin:/bin:$TMUX_DIR" BATHOS_PANES_NO_ATTACH=1 \
      "$PANES_SH" up --project "$EMPTY_PROJECT" >/tmp/bathos-panes-preflight.$$ 2>&1; then

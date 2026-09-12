@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # =============================================================================
 # BATHOS Dynamis — dist/tests/test-check-rule-copies.sh
-# Story B3 §5 픽스처 4종(자기검증) — --check-copies 모드의 세 분기(byte/invariant/
-# 제외 목록)를 전부 격리된 임시 디렉터리에서 검증한다. 실제
-# scripts/drift-exclusions.json·dist/copies-manifest.json은 건드리지 않는다
-# (BATHOS_ROOT·BATHOS_COPIES_MANIFEST·BATHOS_DRIFT_EXCLUSIONS 환경변수로 격리).
+# Story B3 §5 — four self-verifying fixtures covering all three branches of
+# --check-copies (byte / invariant / exclusions), each in an isolated temp dir.
+# The real scripts/drift-exclusions.json and dist/copies-manifest.json are never
+# touched: env vars BATHOS_ROOT, BATHOS_COPIES_MANIFEST, BATHOS_DRIFT_EXCLUSIONS isolate them.
 #
-#   ① 일부러 드리프트시킨 복제본(byte 모드) -> 실패
-#   ② 정합 상태(byte 모드) -> 통과
-#   ③ invariant 문구 누락 -> 실패
-#   ④ 제외 목록 항목의 드리프트 -> 통과(제외 동작 확인)
+#   (1) copy drifted on purpose (byte mode) -> must fail
+#   (2) copy in sync (byte mode)            -> must pass
+#   (3) invariant phrase missing            -> must fail
+#   (4) drift in an excluded path           -> must pass (exclusion works)
 # =============================================================================
 set -uo pipefail
 
@@ -35,7 +35,7 @@ setup_root() {
   printf '%s\n' "$root"
 }
 
-# --- ① byte 모드 드리프트 -> 실패 -------------------------------------------
+# --- (1) byte-mode drift -> fail --------------------------------------------
 root="$(setup_root)"
 echo "canonical content line one" > "$root/canon/rule.md"
 echo "DRIFTED content line one" > "$root/copy/rule.md"
@@ -50,7 +50,7 @@ else
 fi
 rm -rf "$root" /tmp/out1.$$
 
-# --- ② byte 모드 정합 -> 통과 -----------------------------------------------
+# --- (2) byte mode in sync -> pass ------------------------------------------
 root="$(setup_root)"
 echo "canonical content line one" > "$root/canon/rule.md"
 cp "$root/canon/rule.md" "$root/copy/rule.md"
@@ -65,7 +65,7 @@ else
 fi
 rm -rf "$root" /tmp/out2.$$
 
-# --- ③ invariant 문구 누락 -> 실패 ------------------------------------------
+# --- (3) invariant phrase missing -> fail -----------------------------------
 root="$(setup_root)"
 echo "some skill body without the required phrase" > "$root/copy/skill.md"
 cat > "$root/dist/copies-manifest.json" <<EOF
@@ -79,7 +79,7 @@ else
 fi
 rm -rf "$root" /tmp/out3.$$
 
-# --- ④ 제외 목록 항목의 드리프트 -> 통과(제외 동작) --------------------------
+# --- (4) drift in an excluded path -> pass (exclusion) -----------------------
 root="$(setup_root)"
 echo "canonical content line one" > "$root/canon/rule.md"
 echo "DRIFTED but excluded" > "$root/copy/rule-es.md"

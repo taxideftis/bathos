@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# BATHOS  scripts/check-codex-drift.sh  —  Codex 방출물 drift 검사(US13-AC2)
+# BATHOS  scripts/check-codex-drift.sh  —  drift check for the Codex emissions (US13-AC2)
 #
-# 무엇을·왜: `.agents/skills/**`의 generated 파일(scripts/to-codex.sh 산출)이 정본
-# (`.claude/commands/*.md`)과 어긋나 있지 않은지 — 즉 "누군가 방출물을 직접 손으로 고쳐서
-# 재방출과 달라지지 않았는지"를 검사한다(E-EMIT-DRIFT, exceptions.md#5 "정본 수정 후 재방출이
-# 유일 경로"). 검사 방법은 to-codex.sh를 임시 디렉터리(`--skills-root`)에 다시 돌려 실물과
-# diff하는 것뿐이다 — 이 스크립트 자체는 별도 렌더링 로직을 갖지 않는다(멱등 파이프라인의
-# 유일 진실원은 to-codex.sh, 재발명 금지).
+# What & why: checks that the generated files under `.agents/skills/**` (emitted by scripts/to-codex.sh) have
+# not drifted from the canonical source (`.claude/commands/*.md`) — i.e. "did someone hand-edit an emission so
+# that it no longer matches a re-emission?" (E-EMIT-DRIFT, exceptions.md#5 "editing the canonical file and
+# re-emitting is the only path"). The only method used is re-running to-codex.sh into a temp directory
+# (`--skills-root`) and diffing against the real files — this script has no rendering logic of its own (the sole
+# source of truth for the idempotent pipeline is to-codex.sh; do not reinvent it).
 #
-# 검사 대상: generated 헤더 파일만(15개 — story-04 §4). hand-authored 15개(팀 스폰형)는
-# scripts/codex-skills-drift-exclusions.json에 등재된 이름이라 자동 제외한다(파일명 충돌 경위는
-# andrew-command-classification.md#8 참고 — story 원문의 "drift-exclusions.json"이 아니다).
+# Scope: only the generated-header files (15 of them — story-04 §4). The 15 hand-authored ones (team-spawning)
+# are auto-excluded because their names are registered in scripts/codex-skills-drift-exclusions.json (for how the
+# filename clash came about see andrew-command-classification.md#8 — it is NOT the story's "drift-exclusions.json").
 #
-# 사용:
-#   bash scripts/check-codex-drift.sh            # 검사만(비파괴), 그린이면 exit 0
-#   bash scripts/check-codex-drift.sh --verbose   # diff 상세 출력
+# Usage:
+#   bash scripts/check-codex-drift.sh            # check only (non-destructive); exit 0 when green
+#   bash scripts/check-codex-drift.sh --verbose   # print the diff in full
 #
-# CI 배선은 Phillip 소유(.github/workflows/ci.yml, build-plan.md#1) — 이 스크립트는 "호출되는 쪽"만.
+# CI wiring is Phillip's (.github/workflows/ci.yml, build-plan.md#1) — this script is only "the callee".
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -31,7 +31,7 @@ EXCLUSIONS_FILE="$SCRIPT_DIR/codex-skills-drift-exclusions.json"
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/bathos-codex-drift.XXXXXX")"
 trap 'rm -rf "$TMPROOT"' EXIT
 
-# hand-authored 제외 목록 추출(jq 금지 — awk/grep만, project-context-kr.md#1)
+# Extract the hand-authored exclusion list (no jq — awk/grep only, project-context-kr.md#1)
 hand_authored(){
   awk '/"hand_authored_skills"[[:space:]]*:[[:space:]]*\[/{f=1;next} f&&/\]/{f=0} f' "$EXCLUSIONS_FILE" \
     | grep -oE '"[a-zA-Z0-9_-]+"' | tr -d '"'
@@ -47,8 +47,8 @@ echo "== check-codex-drift: $EXCLUSIONS_FILE 기준 재생성 비교 =="
 [ -f "$EXCLUSIONS_FILE" ] || { echo "오류: $EXCLUSIONS_FILE 없음" >&2; exit 1; }
 [ -d "$REAL_SKILLS" ] || { echo "오류: $REAL_SKILLS 없음 — 먼저 'bash scripts/to-codex.sh --write' 실행" >&2; exit 1; }
 
-# to-codex.sh를 임시 root로 재실행(실물은 건드리지 않음 — 순수 비교용 사본 생성).
-# to-codex.sh는 skills 외에도 agents를 방출하므로 agents-root도 tmp로 격리한다.
+# Re-run to-codex.sh into a temp root (the real files stay untouched — the copy is purely for comparison).
+# to-codex.sh emits agents as well as skills, so isolate agents-root into tmp too.
 bash "$SCRIPT_DIR/to-codex.sh" --write --skills-root "$TMPROOT/skills" --agents-root "$TMPROOT/agents" >/dev/null
 
 fail=0
@@ -74,7 +74,7 @@ for d in "$REAL_SKILLS"/*/; do
     [ "$VERBOSE" = "1" ] && diff -u "$regen" "$real" >&2
     fail=$((fail+1))
   fi
-  # openai.yaml도 있으면 동일 비교(인자형 4개)
+  # Compare openai.yaml the same way when it exists (the 4 argument-taking skills)
   if [ -f "$REAL_SKILLS/$name/agents/openai.yaml" ]; then
     real_y="$REAL_SKILLS/$name/agents/openai.yaml"
     regen_y="$TMPROOT/skills/$name/agents/openai.yaml"
