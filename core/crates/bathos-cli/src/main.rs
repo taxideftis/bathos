@@ -1637,7 +1637,10 @@ fn key_file_status(path: &Path) -> KeyFileStatus {
             let perm = unix_file_mode(&m);
             KeyFileStatus {
                 present: true,
-                perm_ok: perm == Some(0o600),
+                // POSIX mode bits only exist on Unix — off-Unix there is nothing to
+                // evaluate, so a present file must not be flagged (a perm_ok of false
+                // here would emit a spurious chmod-600 hint on every Windows key file).
+                perm_ok: perm.is_none_or(|p| p == 0o600),
                 perm,
             }
         }
@@ -3721,12 +3724,18 @@ mod tests {
         write_key_file(dir.path(), "glm", 0o600);
         let ok = key_file_status(&dir.path().join("glm.env"));
         assert!(ok.present);
-        assert!(ok.perm_ok);
-        assert_eq!(ok.perm, Some(0o600));
+        // POSIX mode bits only exist on Unix — off-Unix a present file must not be
+        // flagged (perm_ok stays true, no chmod-600 hint).
+        #[cfg(unix)]
+        {
+            assert!(ok.perm_ok);
+            assert_eq!(ok.perm, Some(0o600));
+        }
 
         write_key_file(dir.path(), "kimi", 0o644);
         let loose = key_file_status(&dir.path().join("kimi.env"));
         assert!(loose.present);
+        #[cfg(unix)]
         assert!(
             !loose.perm_ok,
             "E1: non-0600 is perm_ok=false (warning, never a block)"
