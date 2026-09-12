@@ -41,6 +41,7 @@ use bathos_plug::{ModuleRegistry, PlugManager};
 use bathos_state::{
     model::{GateType, Project},
     model_plan::{self, ModelPlan, Runtime, SessionBackend},
+    model_status::{self, SwitchPlan, SwitchVia},
     runtime_host,
     schema::validate_manifest,
     store::StateStore,
@@ -424,6 +425,59 @@ enum ModelAction {
         #[arg(long)]
         json: bool,
     },
+    /// 세션 백엔드를 다른 런타임으로 전환한다 (기본 dry-run — `--apply`가 있어야 기록·소거).
+    ///
+    /// Tier-R(재시작 경로) 기본: 복붙 커맨드 출력 + `_state/model-status.json`에 전환 계획
+    /// 기록. 실제 전환은 사용자가 안내 명령을 실행해야 하며(세션 재기동은 사람의 행동),
+    /// `bathos model status`가 실측 대조로 검증한다(생성≠검증).
+    /// `--via settings`(Tier-S 일시 주입)는 story M5에서 개방 — 단 복귀 소거
+    /// (`switch claude --apply`)은 이 스토리에서 선행 구현됨.
+    Switch {
+        /// 전환 대상 런타임 (claude|glm|kimi|deepseek|qwen — codex는 미지원)
+        runtime: String,
+        /// 모델 핀 — `ANTHROPIC_MODEL` env로 전달(호환 엔드포인트 경유 동작은 [미확인 V-8]
+        /// 경고 병기). 생략 시 핀 없음(GLM은 Z.ai 별칭 매핑으로 카탈로그 최신 자동 적용).
+        #[arg(long)]
+        model: Option<String>,
+        /// 실제 기록·소거를 수행한다 (없으면 dry-run — 파일 쓰기 0건).
+        #[arg(long)]
+        apply: bool,
+        /// 전환 경로: restart(기본·Tier-R 재시작) | settings(Tier-S — story M5 개방 예정).
+        #[arg(long, value_enum, default_value_t = SwitchViaArg::Restart)]
+        via: SwitchViaArg,
+        /// 사람용 메시지를 stderr로 빼고 stdout에 단일 JSON만 출력한다.
+        #[arg(long)]
+        json: bool,
+    },
+    /// 현재 세션 백엔드를 env에서 재검출해 마지막 전환 계획과 대조한다 (생성≠검증).
+    ///
+    /// 판정은 **env 기준**이며 실제 접속 백엔드 확증은 아니다[V-12]. 일치 시
+    /// `verified=true`를 기록하고 `bathos model detect`(plan SSOT 동기화)를 안내한다.
+    /// 키 파일은 존재·권한만 표시(내용은 읽지 않음).
+    Status {
+        /// 사람용 메시지를 stderr로 빼고 stdout에 단일 JSON만 출력한다.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// clap surface for `bathos_state::model_status::SwitchVia` — ValueEnum cannot be derived
+/// on a foreign type, so this thin mirror exists solely for `--help` rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum SwitchViaArg {
+    /// 재시작 전환 (Tier-R — 항상 성립하는 기본 경로)
+    Restart,
+    /// settings.local.json 일시 주입 (Tier-S — story M5에서 개방)
+    Settings,
+}
+
+impl From<SwitchViaArg> for SwitchVia {
+    fn from(v: SwitchViaArg) -> Self {
+        match v {
+            SwitchViaArg::Restart => SwitchVia::Restart,
+            SwitchViaArg::Settings => SwitchVia::Settings,
+        }
+    }
 }
 
 // `waves.<W?>` role rosters (role↔wave assignment) — moved to `bathos_state::wave_roles` (§4-4 of the W5 task
@@ -1497,7 +1551,847 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
             }
             Ok(0)
         }
+
+        // ── bathos model switch (story M4) ───────────────────────────────────
+        ModelAction::Switch {
+            runtime,
+            model,
+            apply,
+            via,
+            json,
+        } => run_switch(
+            &SwitchInvocation {
+                runtime_str: &runtime,
+                model_pin: model.as_deref(),
+                apply,
+                via: via.into(),
+                json,
+            },
+            state_dir,
+            root,
+            home_bathos_dir().as_deref(),
+            // The honest "current" backend as seen by THIS process — the live answer the
+            // report records and the return path's unset guidance keys off.
+            SessionBackend::detect_from_base_url(
+                std::env::var("ANTHROPIC_BASE_URL").ok().as_deref(),
+            ),
+        ),
+
+        // ── bathos model status (story M4, AC9) ──────────────────────────────
+        ModelAction::Status { json } => run_status(
+            json,
+            state_dir,
+            home_bathos_dir().as_deref(),
+            std::env::var("ANTHROPIC_BASE_URL").ok().as_deref(),
+        ),
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Model switch / status (story M4, w7-model-switch-limit-design §4/§6)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// `switch` is a dry-run-by-default planner + (with `--apply`) a recorder. It never
+// *executes* a switch itself — the user pastes the printed commands into a terminal
+// (Tier-R) — and a switch only counts as done once `model status` re-detects the live
+// env and flips `verified` (AC9, generation ≠ verification). The one file this command
+// may edit (return path only) is `.claude/settings.local.json`, and only by overwriting
+// the three shadow env keys with "" — never by deleting keys: env **removal** does not
+// propagate to a live session [measured M3]; overwrite does [measured M2], and an empty
+// string is treated as unset → subscription fallback [measured M5, session start].
+
+/// Dry-run-by-default planner inputs for `bathos model switch`.
+struct SwitchInvocation<'a> {
+    runtime_str: &'a str,
+    model_pin: Option<&'a str>,
+    apply: bool,
+    via: SwitchVia,
+    json: bool,
+}
+
+/// `~/.bathos` — the out-of-repo key store root (w7 design §2.2). HOME-based because the
+/// workspace pins no `dirs` crate; handlers receive the resolved dir as a parameter so
+/// tests can point it at a tempdir instead of the real home. `None` = HOME unresolvable.
+fn home_bathos_dir() -> Option<PathBuf> {
+    std::env::var("HOME")
+        .ok()
+        .filter(|h| !h.is_empty())
+        .map(|h| PathBuf::from(h).join(".bathos"))
+}
+
+/// Existence + permission probe for a key file. **Deliberately reads nothing** (Tier-R
+/// consumes the key in the user's shell, never in this process): `fs::metadata` only, and
+/// the returned struct has no content channel — "no key material can leak into the CLI"
+/// is a compile-time property, not a discipline.
+struct KeyFileStatus {
+    present: bool,
+    /// `true` only when the mode is exactly 0600 (E1: anything else warrants a
+    /// chmod-600 hint — a warning, never a block).
+    perm_ok: bool,
+    perm: Option<u32>,
+}
+
+fn key_file_status(path: &Path) -> KeyFileStatus {
+    match std::fs::metadata(path) {
+        Ok(m) => {
+            let perm = unix_file_mode(&m);
+            KeyFileStatus {
+                present: true,
+                perm_ok: perm == Some(0o600),
+                perm,
+            }
+        }
+        Err(_) => KeyFileStatus {
+            present: false,
+            perm_ok: false,
+            perm: None,
+        },
+    }
+}
+
+#[cfg(unix)]
+fn unix_file_mode(m: &std::fs::Metadata) -> Option<u32> {
+    use std::os::unix::fs::PermissionsExt;
+    Some(m.permissions().mode() & 0o777)
+}
+
+#[cfg(not(unix))]
+fn unix_file_mode(_m: &std::fs::Metadata) -> Option<u32> {
+    None
+}
+
+/// The store-side variable name `~/.bathos/<rt>.env` exports per runtime (w7 design §2.2).
+/// glm keeps its historical `Z_AI_API_KEY` (scripts/glm-env.sh consumes it); the other
+/// three use BATHOS-prefixed names. M1's `key_store.rs` will own this mapping — kept here
+/// (its only consumer is [`switch_paste_commands`]) until that module exists.
+fn key_store_var(rt: Runtime) -> &'static str {
+    match rt {
+        Runtime::Glm => "Z_AI_API_KEY",
+        Runtime::Kimi => "BATHOS_KIMI_KEY",
+        Runtime::Deepseek => "BATHOS_DEEPSEEK_KEY",
+        Runtime::Qwen => "BATHOS_QWEN_KEY",
+        // Unreachable through run_switch (claude = return path, codex rejected upstream) —
+        // arm kept total so adding a Runtime variant stays a one-line change.
+        Runtime::Claude | Runtime::Codex => "(해당 없음)",
+    }
+}
+
+/// `[E-KEY-ABSENT]` (AC2) — factored out so the exact wording is unit-assertable without
+/// capturing stderr. Reuses the established `[E-*]` message style (code first, guidance
+/// after); explicitly states the content-never-read property so users trust the probe.
+fn err_key_absent(rt: Runtime) -> String {
+    format!(
+        "[E-KEY-ABSENT] ~/.bathos/{name}.env 키 파일이 없습니다 — 먼저 `bathos key set {name}` 로 \
+         등록하세요. (Tier-R 경로는 키 파일 내용을 읽지 않습니다 — 존재·권한만 검사)",
+        name = rt.as_str()
+    )
+}
+
+/// `[E-MODEL-SWITCH-UNSUPPORTED]` (AC3) — codex is a separate-process delegation
+/// (ADR-D-0006), never a session backend to switch onto.
+fn err_switch_unsupported() -> String {
+    "[E-MODEL-SWITCH-UNSUPPORTED] codex는 세션 백엔드 전환 대상이 아닙니다(별도 프로세스 위임 — \
+     ADR-D-0006). 역할 배정 변경은 `bathos model set <slug> --runtime codex` 를 사용하세요."
+        .to_string()
+}
+
+/// Tier-R copy-paste command block (AC4). glm reuses the existing script verbatim ("works
+/// today" — 2026-07-16 live PASS); kimi/deepseek get a raw `export` line whose endpoint is
+/// `env_endpoint_hint` verbatim (the frozen source of truth — for these two the hint *is*
+/// the bare URL, and `env_auth_var` keeps deepseek on `ANTHROPIC_API_KEY`); qwen gets a
+/// fill-in placeholder plus the hint's two-shape warning verbatim, because no canonical
+/// qwen URL exists to invent (발명 금지). `model_pin` adds one `ANTHROPIC_MODEL` export
+/// line (AC7) — the V-8 warning is rendered by the caller, keeping this block paste-safe.
+fn switch_paste_commands(target: Runtime, model_pin: Option<&str>) -> Vec<String> {
+    let mut lines = Vec::new();
+    match target {
+        Runtime::Glm => {
+            lines.push("# GLM (기존 스크립트 재사용 — 오늘 그대로 동작)".to_string());
+            lines.push("source ~/.bathos/glm.env && source scripts/glm-env.sh".to_string());
+        }
+        Runtime::Kimi | Runtime::Deepseek => {
+            let name = target.as_str();
+            lines.push(format!("# {name} (전용 스크립트 부재 [실측] — raw export)"));
+            lines.push(format!(
+                "source ~/.bathos/{name}.env && export ANTHROPIC_BASE_URL=\"{ep}\" {auth}=\"${store}\"",
+                ep = model_plan::env_endpoint_hint(target),
+                auth = model_plan::env_auth_var(target),
+                store = key_store_var(target),
+            ));
+        }
+        Runtime::Qwen => {
+            lines.push(
+                "# Qwen (전용 스크립트 부재 [실측] — raw export, 단 엔드포인트 미확정)".to_string(),
+            );
+            lines.push(
+                "source ~/.bathos/qwen.env && export ANTHROPIC_BASE_URL=\"<엔드포인트 미확정 — 아래 \
+                 경고의 두 형태 중 Model Studio 콘솔에서 확인한 것으로 대입>\" \
+                 ANTHROPIC_AUTH_TOKEN=\"$BATHOS_QWEN_KEY\""
+                    .to_string(),
+            );
+            // The qwen hint is a warning, not a URL — emit it verbatim as comment lines so
+            // the whole block stays safe to paste as-is.
+            for l in model_plan::env_endpoint_hint(Runtime::Qwen).lines() {
+                lines.push(format!("# {l}"));
+            }
+        }
+        // Unreachable through run_switch (claude uses return_paste_commands, codex is
+        // rejected before planning) — arm kept total.
+        Runtime::Claude | Runtime::Codex => {
+            lines.push(format!(
+                "# {} — 이 런타임은 Tier-R 전환 블록 대상이 아닙니다",
+                target.as_str()
+            ));
+        }
+    }
+    if let Some(pin) = model_pin {
+        lines.push(format!("export ANTHROPIC_MODEL=\"{pin}\""));
+    }
+    lines.push("claude --continue".to_string());
+    lines
+}
+
+/// Return-path (target=claude) Tier-R block (AC8). `scripts/glm-env.sh --unset` only for a
+/// GLM shell env (AC8 verbatim); other env-global shells get a raw `unset` because
+/// glm-env.sh --unset leaves `ANTHROPIC_API_KEY` alone [script line 6, measured] — the one
+/// variable Deepseek's auth actually uses. An already-clean shell gets no unset line at
+/// all (a restart alone starts a clean process).
+fn return_paste_commands(measured: SessionBackend) -> Vec<String> {
+    let mut lines = vec!["# Claude 복귀 — 재시작 경로 (Tier-R)".to_string()];
+    match measured {
+        SessionBackend::Glm => {
+            lines.push(
+                "scripts/glm-env.sh --unset     # 현재 셸의 GLM env 해제 [실측 — 스크립트 6·13행에 --unset 실존]"
+                    .to_string(),
+            );
+        }
+        SessionBackend::Kimi | SessionBackend::Deepseek | SessionBackend::Qwen => {
+            lines.push(format!(
+                "# ({} 셸 env — 전용 해제 스크립트 부재 [실측]; glm-env.sh --unset은 \
+                 ANTHROPIC_API_KEY를 해제하지 않음 [스크립트 6행])",
+                measured.as_str()
+            ));
+            lines.push(
+                "unset ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY API_TIMEOUT_MS"
+                    .to_string(),
+            );
+        }
+        SessionBackend::Claude => {}
+    }
+    lines.push("claude --continue".to_string());
+    lines
+}
+
+/// The three `env.*` keys in `.claude/settings.local.json` that shadow the Anthropic
+/// default backend. "Clear" always means **overwrite with `""`** — never remove.
+const SHADOWED_ENV_KEYS: [&str; 3] = [
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+];
+
+/// Why a settings.local.json read-modify-write refused to run.
+#[derive(Debug)]
+enum SettingsError {
+    /// The file exists but is not valid JSON — **never overwritten** (E3): manual
+    /// guidance is the only safe path, and exit 1 keeps the failure loud.
+    Unparseable(String),
+    Io(std::io::Error),
+}
+
+fn settings_local_path(root: &Path) -> PathBuf {
+    root.join(".claude/settings.local.json")
+}
+
+/// Read-only: which shadow keys are present with a non-empty value (dry-run preview).
+/// Absent file, absent `env` block, or a non-object `env` → empty (nothing shadows).
+fn settings_shadow_keys(path: &Path) -> Result<Vec<String>, SettingsError> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(SettingsError::Io(e)),
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| SettingsError::Unparseable(e.to_string()))?;
+    Ok(collect_shadow_keys(&value))
+}
+
+/// Pure over a parsed document — shared by the dry-run preview and the clear path so both
+/// answer "what shadows the Anthropic backend?" identically. A key counts as shadowing
+/// when present and not an empty string (non-string values count as non-empty: the safe
+/// direction is to clear them).
+fn collect_shadow_keys(value: &serde_json::Value) -> Vec<String> {
+    match value.get("env").and_then(|e| e.as_object()) {
+        None => Vec::new(),
+        Some(env) => SHADOWED_ENV_KEYS
+            .iter()
+            .filter(|k| {
+                env.get(**k)
+                    .map(|v| v.as_str().map(|s| !s.is_empty()).unwrap_or(true))
+                    .unwrap_or(false)
+            })
+            .map(|k| k.to_string())
+            .collect(),
+    }
+}
+
+/// Read-modify-write: overwrite each present non-empty shadow key with `""`. Touches
+/// nothing else — permissions, allowlists, and every other key/value survive. Absent file
+/// or nothing to clear → no write at all (no mtime churn on a no-op). Known cosmetic side
+/// effect: serde_json's default map re-serializes objects key-sorted and pretty-printed —
+/// values are preserved, order/formatting normalized (recorded in impl-notes; enabling
+/// serde_json's `preserve_order` feature would need a workspace-Cargo.toml change outside
+/// this story's ownership).
+fn clear_settings_env(path: &Path) -> Result<Vec<String>, SettingsError> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(r) => r,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(SettingsError::Io(e)),
+    };
+    let mut value: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| SettingsError::Unparseable(e.to_string()))?;
+
+    let shadowed = collect_shadow_keys(&value);
+    if shadowed.is_empty() {
+        return Ok(shadowed); // nothing to clear — do not touch the file
+    }
+    {
+        let env = value
+            .get_mut("env")
+            .and_then(|e| e.as_object_mut())
+            .expect("collect_shadow_keys found a non-empty env object");
+        for k in &shadowed {
+            env.insert(k.clone(), serde_json::Value::String(String::new()));
+        }
+    }
+    let pretty = serde_json::to_string_pretty(&value)
+        .map_err(|e| SettingsError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+    std::fs::write(path, pretty).map_err(SettingsError::Io)?;
+    Ok(shadowed)
+}
+
+/// `bathos model switch` — see [`SwitchInvocation`]. `bathos_dir` (key-store root) and
+/// `measured` (the live backend) are parameters, not env reads, so tests point them at
+/// fixtures instead of polluting the real environment.
+fn run_switch(
+    inv: &SwitchInvocation,
+    state_dir: &Path,
+    root: &Path,
+    bathos_dir: Option<&Path>,
+    measured: SessionBackend,
+) -> Result<i32> {
+    // AC10: invalid runtime → exit 2, reusing Runtime::parse's existing
+    // `[E-MODEL-RUNTIME-INVALID]` wording verbatim (no rewording here).
+    let target = match Runtime::parse(inv.runtime_str) {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("{e}");
+            return Ok(2);
+        }
+    };
+
+    // AC3: codex is a subprocess delegation, not a session backend.
+    if target == Runtime::Codex {
+        eprintln!("{}", err_switch_unsupported());
+        return Ok(2);
+    }
+
+    // Story M4 placeholder (AC1's lead-delegated choice): Tier-S injection is story M5.
+    // Decision = exit **0** with a notice: the story frames this as "오류 아님", and this
+    // workspace's exit 2 is reserved for blocking E-* errors. The notice prints on both
+    // channels so neither humans nor scripts can mistake it for a completed switch
+    // (decision recorded in .agent-team/08-impl-notes/backend.md).
+    // `target == claude` is exempt: the Tier-S *return* (clearing) is implemented in M4 as
+    // a lead-directed backport, so `--via settings` is honored for the return direction.
+    if inv.via == SwitchVia::Settings && target != Runtime::Claude {
+        let notice = "[--via settings] Tier-S(settings.local.json 일시 주입)는 이 스토리에서 \
+                      미개방 — story M5에서 구현됩니다. 지금은 기본 경로를 사용하세요: \
+                      bathos model switch <runtime> --apply  (쓰기 없음 — 상태 변경 없음)";
+        eprintln!("{notice}");
+        if inv.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "bathos/model-switch@1",
+                    "mode": "not-open",
+                    "target": target.as_str(),
+                    "via": "settings",
+                    "reason": "story M5",
+                    "verify_command": "bathos model status",
+                })
+            );
+        }
+        return Ok(0);
+    }
+
+    // AC2 premise check — existence + permission only, content never read. Only `apply`
+    // hard-fails: a dry-run reports the gap and exits 0 (a plan with a "key missing"
+    // warning is exactly what a dry-run is for).
+    let key_path = bathos_dir.map(|d| d.join(format!("{}.env", target.as_str())));
+    let key = key_path.as_deref().map(key_file_status);
+    if inv.apply && target.is_env_global() {
+        let present = key.as_ref().map(|k| k.present).unwrap_or(false);
+        if !present {
+            // HOME unresolvable also lands here — "no reachable key store" fails closed.
+            eprintln!("{}", err_key_absent(target));
+            return Ok(2);
+        }
+    }
+
+    let paste: Vec<String> = if target == Runtime::Claude {
+        return_paste_commands(measured)
+    } else {
+        switch_paste_commands(target, inv.model_pin)
+    };
+
+    // Honest-limitation warnings (V-numbers are the design's unfabricated-evidence ledger:
+    // an unconfirmed behavior must be labeled unconfirmed, never shipped as "works").
+    let mut warnings: Vec<String> = Vec::new();
+    if target == Runtime::Claude && inv.model_pin.is_some() {
+        // Deliberately ignored rather than honored: a model pin belongs to the plan SSOT
+        // (`bathos model set`); mixing a pin into the return path would re-pin the very
+        // session being returned to default. Decision recorded in impl-notes.
+        warnings.push(
+            "⚠ --model 핀은 claude 복귀에는 정의되지 않았습니다 — 무시합니다(계획된 모델 배정은 \
+             `bathos model set` 소유)."
+                .to_string(),
+        );
+    }
+    if inv.model_pin.is_some() && target.is_env_global() {
+        warnings.push(
+            "[V-8 미확인] ANTHROPIC_MODEL 핀의 호환 엔드포인트 경유 동작은 미확인 — M2가 성립을 \
+             측정하기 전까지 검증되지 않은 경로입니다(미확인을 동작으로 사용하지 마세요)."
+                .to_string(),
+        );
+    }
+    if target == Runtime::Glm && inv.model_pin.is_none() {
+        warnings.push(
+            "모델 핀 없음 — Z.ai 별칭 매핑으로 카탈로그 최신(현재 glm-5.3) 자동 적용 \
+             [실측 catalog — 실행 시점 기준]"
+                .to_string(),
+        );
+    }
+
+    // Settings shadow preview (claude target only). Dry-run: report-only; an unparseable
+    // file is a warning here because nothing is written yet. Apply: `clear_settings_env`
+    // below hard-fails on the same condition (E3).
+    let mut settings_preview: Result<Vec<String>, String> = Ok(Vec::new());
+    if target == Runtime::Claude {
+        settings_preview = match settings_shadow_keys(&settings_local_path(root)) {
+            Ok(keys) => Ok(keys),
+            Err(SettingsError::Unparseable(e)) => Err(e),
+            Err(SettingsError::Io(e)) => {
+                return Err(anyhow::Error::new(e).context("settings.local.json 접근 실패"))
+            }
+        };
+    }
+
+    if !inv.apply {
+        // ── AC1: dry-run — print the plan, write nothing ─────────────────────
+        let shadowed = match &settings_preview {
+            Ok(keys) => keys.clone(),
+            Err(e) => {
+                warnings.push(format!(
+                    "⚠ settings.local.json 파싱 불가 — apply 시 소거를 시도하지 않고 exit 1이 됩니다 \
+                     (수동 확인 필요: {e})"
+                ));
+                Vec::new()
+            }
+        };
+        if inv.json {
+            println!(
+                "{}",
+                switch_json_view(
+                    "dry-run",
+                    target,
+                    inv.via,
+                    inv.model_pin,
+                    key.as_ref(),
+                    &shadowed,
+                    &paste,
+                    &warnings
+                )
+            );
+            for w in &warnings {
+                eprintln!("[bathos model switch] {w}");
+            }
+            return Ok(0);
+        }
+        let mut out = vec![
+            "[bathos model switch] 전환 계획 (dry-run — 쓰기 0건, `--apply`로 확정)".to_string(),
+            format!("  target: {}  via: {}", target.as_str(), inv.via.as_str()),
+        ];
+        out.push(match &key {
+            Some(k) if k.present && k.perm_ok => format!(
+                "  키 파일: ~/.bathos/{}.env 존재 (권한 600)",
+                target.as_str()
+            ),
+            Some(k) if k.present => format!(
+                "  키 파일: ~/.bathos/{}.env 존재 (⚠ 권한 {:#o} — chmod 600 권장)",
+                target.as_str(),
+                k.perm.unwrap_or(0)
+            ),
+            Some(_) if target.is_env_global() => format!(
+                "  키 파일: ~/.bathos/{}.env 없음 — apply 전 `bathos key set {}` 필요",
+                target.as_str(),
+                target.as_str()
+            ),
+            // claude needs no key store (return path; AC2 only gates env-global targets).
+            Some(_) => format!(
+                "  키 파일: ~/.bathos/{}.env 없음 — {} 전환에 키 파일 불필요",
+                target.as_str(),
+                target.as_str()
+            ),
+            None => "  키 파일: 키 스토어 위치(HOME) 미확인 — apply 전 확인 필요".to_string(),
+        });
+        if target == Runtime::Claude {
+            if shadowed.is_empty() {
+                out.push(
+                    "  settings.local.json: 소거할 env 키 없음(파일 없음 또는 이미 비어있음)"
+                        .to_string(),
+                );
+            } else {
+                out.push(format!(
+                    "  settings.local.json 소거 예상: {} (값은 표시하지 않음)",
+                    shadowed
+                        .iter()
+                        .map(|k| format!("env.{k}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+        for w in &warnings {
+            out.push(format!("  ⚠ {w}"));
+        }
+        out.push(String::new());
+        out.extend(paste.iter().map(|l| format!("  {l}")));
+        out.push(String::new());
+        out.push("전환 후 확인: bathos model status".to_string());
+        println!("{}", out.join("\n"));
+        return Ok(0);
+    }
+
+    // ── apply ─────────────────────────────────────────────────────────────────
+    let mut settings_cleared: Vec<String> = Vec::new();
+    if target == Runtime::Claude {
+        let settings_path = settings_local_path(root);
+        match clear_settings_env(&settings_path) {
+            Ok(cleared) => settings_cleared = cleared,
+            Err(SettingsError::Unparseable(e)) => {
+                // E3: never overwrite an unparseable file — refuse with zero writes
+                // (the plan is also NOT recorded: a half-applied return is worse than a
+                // loudly refused one).
+                eprintln!(
+                    "[E-MODEL-SETTINGS-UNPARSEABLE] {} 파싱 실패 — 절대 덮어쓰지 않았습니다. \
+                     파일을 수동으로 확인·복구한 뒤 다시 실행하세요. (JSON 오류: {e})",
+                    settings_path.display()
+                );
+                return Ok(1);
+            }
+            Err(SettingsError::Io(e)) => {
+                return Err(anyhow::Error::new(e).context("settings.local.json 접근 실패"))
+            }
+        }
+    }
+
+    // Record the plan with verified=false — "a printed command is not an applied switch".
+    // `session_backend` is stamped with the *measured at apply time* backend: the real
+    // switch happens later, in the user's terminal, and `model status` will re-detect.
+    let (mut status, load_warnings) = model_status::load(state_dir);
+    for w in &load_warnings {
+        eprintln!("[bathos model switch] {} — {}", w.code, w.message);
+    }
+    status.updated = chrono::Utc::now();
+    status.session_backend = measured;
+    status.last_switch_plan = Some(SwitchPlan {
+        target,
+        via: inv.via,
+        printed_at: chrono::Utc::now(),
+        verified: false,
+    });
+    if target == Runtime::Claude {
+        // The return path consumed any Tier-S residue (the shadow keys are blanked).
+        status.transient_injection = None;
+    }
+    model_status::save(state_dir, &status).with_context(|| "model-status.json 저장 실패")?;
+
+    // Behavior record goes to the existing HMAC chain — the target carries runtime/via
+    // only; key material must never enter an audit field (same rule as `model.set`).
+    let _ = bathos_state::audit::append_audit_entry(
+        &state_dir.join("audit-log.jsonl"),
+        &read_project_id_from_state(state_dir),
+        "Paul",
+        "model.switch",
+        &format!("{}/{}", target.as_str(), inv.via.as_str()),
+    );
+
+    if inv.json {
+        println!(
+            "{}",
+            switch_json_view(
+                "apply",
+                target,
+                inv.via,
+                inv.model_pin,
+                key.as_ref(),
+                &settings_cleared,
+                &paste,
+                &warnings
+            )
+        );
+        for w in &warnings {
+            eprintln!("[bathos model switch] {w}");
+        }
+        return Ok(0);
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    if target == Runtime::Claude {
+        out.push("[bathos model switch] claude 복귀 — 상태 기록·감사 완료".to_string());
+        if settings_cleared.is_empty() {
+            out.push(
+                "  settings.local.json: 소거할 env 키 없음(파일 없음 또는 이미 비어있음) — 파일 미변경"
+                    .to_string(),
+            );
+        } else {
+            out.push(format!(
+                "  settings.local.json: {} → 빈 문자열 덮어쓰기 완료 (값·지문은 출력하지 않음 — 마스킹)",
+                settings_cleared
+                    .iter()
+                    .map(|k| format!("env.{k}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+            // Honest combined-path caveat: overwrite-live [M2] and empty-means-unset [M5]
+            // were each measured, their *combination* has not been (V-13) — say "expected",
+            // not "works", and point at the verification command.
+            out.push(
+                "  정직한 한계: 재시작 없이 다음 API 호출부터 claude 기본 백엔드로 폴백이 예상되나 \
+                 라이브 결합은 미검증(V-13) — `bathos model status`로 확인하고, 실패 시 아래 \
+                 재시작 안내를 따르세요."
+                    .to_string(),
+            );
+        }
+        if measured != SessionBackend::Claude {
+            // AC8's one-line reason, verbatim in spirit: the process boundary, not BATHOS,
+            // is what makes the unset necessary.
+            out.push(
+                "  이유: 셸 export는 Claude Code가 지울 수 없어(프로세스 경계) 재시작이 필요합니다."
+                    .to_string(),
+            );
+            out.push(
+                "  한계 고지: 이 출력은 현재 세션을 바꾸지 못합니다 — 아래 명령을 실행한 뒤 \
+                 새 프로세스로 이어가세요."
+                    .to_string(),
+            );
+        } else {
+            out.push(
+                "  셸 env에 ANTHROPIC_BASE_URL 없음 — 새 세션부터 claude 기본 백엔드입니다."
+                    .to_string(),
+            );
+        }
+    } else {
+        out.push(format!(
+            "[bathos model switch] {} 전환 — 상태 기록·감사 완료",
+            target.as_str()
+        ));
+        // AC5: the honest Tier-R limitation, always.
+        out.push(
+            "  한계 고지: 이 명령은 현재 세션을 바꾸지 못합니다 — 아래 명령을 새 터미널에서 실행하세요 \
+             (ADR-D-0005: 세션 재기동은 사람의 행동)."
+                .to_string(),
+        );
+    }
+    for w in &warnings {
+        out.push(format!("  ⚠ {w}"));
+    }
+    out.push(String::new());
+    out.extend(paste.iter().map(|l| format!("  {l}")));
+    out.push(String::new());
+    // §4.5-1: every apply ends with the verification pointer — generation ≠ verification.
+    out.push("전환 후 확인: bathos model status".to_string());
+    println!("{}", out.join("\n"));
+    Ok(0)
+}
+
+/// The `--json` view for `model switch` — stdout carries exactly this document; human
+/// wording goes to stderr (same stdout/stderr contract as `model show --json`).
+/// The parameter list mirrors the `bathos/model-switch@1` schema fields 1:1 on purpose —
+/// bundling them into a struct would relocate the same list without adding a reusable
+/// abstraction, so the arity lint is relaxed here.
+#[allow(clippy::too_many_arguments)]
+fn switch_json_view(
+    mode: &str,
+    target: Runtime,
+    via: SwitchVia,
+    model_pin: Option<&str>,
+    key: Option<&KeyFileStatus>,
+    settings_cleared: &[String],
+    paste: &[String],
+    warnings: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "bathos/model-switch@1",
+        "mode": mode,
+        "target": target.as_str(),
+        "via": via.as_str(),
+        "model_pin": model_pin,
+        "key_file": key.map(|k| serde_json::json!({
+            "present": k.present,
+            "perm": k.perm.map(|p| format!("{:o}", p)),
+            "perm_ok": k.perm_ok,
+        })),
+        "settings_env_cleared": settings_cleared,
+        "paste_commands": paste,
+        "warnings": warnings,
+        "verify_command": "bathos model status",
+    })
+}
+
+/// `bathos model status` — the verification half of "a switch is not done until verified"
+/// (AC9). Re-detects the live env backend and compares it with the recorded switch plan.
+/// Writes only when a plan exists (to persist `verified`); otherwise a pure read-only
+/// report. Everything here is **env-based** — the output must keep saying so (real
+/// connection confirmation is V-12, out of this command's reach). `bathos_dir` and
+/// `base_url` are parameters so tests inject fixtures/values without touching real env.
+fn run_status(
+    json: bool,
+    state_dir: &Path,
+    bathos_dir: Option<&Path>,
+    base_url: Option<&str>,
+) -> Result<i32> {
+    let measured = SessionBackend::detect_from_base_url(base_url);
+    let (mut status, warnings) = model_status::load(state_dir);
+    for w in &warnings {
+        eprintln!("[bathos model status] {} — {}", w.code, w.message);
+    }
+
+    // AC9 comparison. Only a recorded plan gets a verdict; no plan = nothing to verify
+    // (and no write — status stays read-only until a switch exists).
+    let mut verification: Option<(Runtime, SwitchVia, bool)> = None;
+    if status.last_switch_plan.is_some() {
+        let plan = status.last_switch_plan.clone().expect("checked above");
+        let matched = model_status::plan_matches_backend(&plan, measured);
+        verification = Some((plan.target, plan.via, matched));
+        status.updated = chrono::Utc::now();
+        status.session_backend = measured;
+        if let Some(p) = status.last_switch_plan.as_mut() {
+            p.verified = matched;
+        }
+        model_status::save(state_dir, &status)
+            .with_context(|| "model-status.json 저장 실패(verified 기록)")?;
+    }
+
+    // Key store: existence + permission only — contents are never read (fingerprints and
+    // scan are M1's territory; this line exists so "did you even register the key?" is
+    // answerable next to the verification verdict).
+    let key_report: Vec<serde_json::Value> = ["glm", "kimi", "deepseek", "qwen"]
+        .iter()
+        .map(|name| {
+            let kf = bathos_dir
+                .map(|d| key_file_status(&d.join(format!("{name}.env"))))
+                .filter(|k| k.present);
+            serde_json::json!({
+                "runtime": name,
+                "present": kf.is_some(),
+                "perm": kf.as_ref().and_then(|k| k.perm.map(|p| format!("{:o}", p))),
+                "perm_ok": kf.as_ref().map(|k| k.perm_ok).unwrap_or(false),
+            })
+        })
+        .collect();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "bathos/model-status-view@1",
+                "env_basis": true,
+                "measured_session_backend": measured.as_str(),
+                "base_url": base_url,
+                "last_switch_plan": status.last_switch_plan,
+                "verification": verification.map(|(t, v, m)| serde_json::json!({
+                    "target": t.as_str(),
+                    "via": v.as_str(),
+                    "matched": m,
+                })),
+                "transient_injection": status.transient_injection,
+                "key_store": key_report,
+                "verify_note": "env 기준 판정 — 실제 접속 백엔드 확증은 아님 [V-12]",
+            })
+        );
+        return Ok(0);
+    }
+
+    let base_url_display = base_url.unwrap_or("(unset)");
+    let mut out = vec![
+        "[bathos model status] (env 기준 — 실제 접속 백엔드 확증은 아님 [V-12])".to_string(),
+        format!(
+            "  실측 session_backend : {} (ANTHROPIC_BASE_URL={})",
+            measured.as_str(),
+            base_url_display
+        ),
+    ];
+    match verification {
+        Some((target, via, true)) => {
+            out.push(format!(
+                "  전환 확인됨: session_backend={} (계획 {}/{}과 일치) — verified=true 기록",
+                measured.as_str(),
+                target.as_str(),
+                via.as_str()
+            ));
+            // Plan SSOT (`model-plan.json`) still says whatever `model detect` last wrote —
+            // surface the sync step instead of silently leaving them diverged.
+            out.push("    → plan SSOT 동기화: bathos model detect".to_string());
+        }
+        Some((target, via, false)) => {
+            // Report the measured value as-is — never assert that the user "didn't run it"
+            // (they may have run it in a different terminal than the one this env shows).
+            out.push(format!(
+                "  전환 미적용: 계획={}, 실측={} — 안내된 명령을 실행했는지 확인하세요",
+                target.as_str(),
+                measured.as_str()
+            ));
+            out.push(match via {
+                SwitchVia::Restart => {
+                    "    → 다음 조치: 새 터미널에서 안내된 전환 명령을 실행하세요 \
+                                       (계획 재출력: bathos model switch <runtime>)"
+                        .to_string()
+                }
+                SwitchVia::Settings => "    → 다음 조치: 주입·소거 상태를 확인하세요 — 실패 시 \
+                                        재시작 폴백(새 터미널에서 claude 실행)"
+                    .to_string(),
+            });
+        }
+        None => {
+            out.push("  전환 계획 없음 — 기록된 마지막 전환이 없습니다 (bathos model switch <runtime> --apply)".to_string());
+        }
+    }
+    let key_human = key_report
+        .iter()
+        .map(|k| {
+            let name = k["runtime"].as_str().unwrap_or("?");
+            match (k["present"].as_bool().unwrap_or(false), k["perm"].as_str()) {
+                (true, Some("600")) => format!("{name} ●(600)"),
+                (true, Some(p)) => format!("{name} ●({p}⚠chmod600권장)"),
+                (true, None) => format!("{name} ●(권한미확인)"),
+                (false, _) => format!("{name} ○"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("   ");
+    out.push(format!(
+        "  키 스토어            : {key_human}   (존재·권한만 표시 — 내용 미읽음)"
+    ));
+    if status.transient_injection.is_some() {
+        // E15: Tier-S residue detected — the plaintext copy is still sitting in settings.
+        out.push(
+            "  ⚠ 일시 키 사본 체류 중 — `bathos model switch claude --apply`로 소거하세요 (E15)"
+                .to_string(),
+        );
+    }
+    println!("{}", out.join("\n"));
+    Ok(0)
 }
 
 /// Resolves the role slugs `bathos model show` should display: the wave's registered roster
@@ -2410,5 +3304,522 @@ mod tests {
         }
         assert_eq!(handle_state(invalid_lang, dir.path()).unwrap(), 1);
         assert!(!dir.path().join("manifest.json").exists());
+    }
+
+    // ── model switch / status (story M4) ─────────────────────────────────────
+
+    use bathos_state::model_status as ms;
+
+    /// Fake key material used ONLY to prove it never appears in written state — if this
+    /// literal ever leaks into model-status.json or the audit log, the Tier-R
+    /// "content is never read" invariant is broken and these tests must fail.
+    const FAKE_KEY: &str = "FAKE-KEY-DO-NOT-LEAK";
+
+    fn write_key_file(dir: &Path, name: &str, mode: u32) {
+        let path = dir.join(format!("{name}.env"));
+        std::fs::write(&path, format!("export KEY={FAKE_KEY}")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+    }
+
+    /// The live-repo shape [lead-measured 2026-09-12]: GLM env injected alongside
+    /// unrelated env keys and a permissions allowlist that must survive untouched.
+    fn injected_settings_json() -> &'static str {
+        r#"{
+            "permissions": {"allow": ["Bash(bathos:*)", "WebFetch(domain:docs.z.ai)"]},
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": "GLM-TOKEN-PLAINTEXT",
+                "ANTHROPIC_API_KEY": "",
+                "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+                "API_TIMEOUT_MS": "3000000"
+            },
+            "enableAllProjectMcpServers": false
+        }"#
+    }
+
+    fn switch_args<'a>(
+        runtime: &'a str,
+        model: Option<&'a str>,
+        apply: bool,
+        via: ms::SwitchVia,
+        json: bool,
+    ) -> SwitchInvocation<'a> {
+        SwitchInvocation {
+            runtime_str: runtime,
+            model_pin: model,
+            apply,
+            via,
+            json,
+        }
+    }
+
+    fn glm_plan_status(state_dir: &Path) {
+        let status = ms::ModelStatus {
+            last_switch_plan: Some(ms::SwitchPlan {
+                target: Runtime::Glm,
+                via: ms::SwitchVia::Restart,
+                printed_at: chrono::Utc::now(),
+                verified: false,
+            }),
+            ..Default::default()
+        };
+        ms::save(state_dir, &status).unwrap();
+    }
+
+    // ── AC1: dry-run writes nothing ──────────────────────────────────────────
+
+    #[test]
+    fn switch_dry_run_writes_nothing() {
+        let state = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        write_key_file(keys.path(), "glm", 0o600);
+        let code = run_switch(
+            &switch_args("glm", None, false, ms::SwitchVia::Restart, false),
+            state.path(),
+            root.path(),
+            Some(keys.path()),
+            SessionBackend::Claude,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert!(!state.path().join("model-status.json").exists());
+        assert!(!state.path().join("audit-log.jsonl").exists());
+    }
+
+    #[test]
+    fn switch_dry_run_json_mode_still_writes_nothing() {
+        let state = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        write_key_file(keys.path(), "glm", 0o600);
+        let code = run_switch(
+            &switch_args("glm", Some("glm-5.3"), false, ms::SwitchVia::Restart, true),
+            state.path(),
+            state.path(),
+            Some(keys.path()),
+            SessionBackend::Claude,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert!(!state.path().join("model-status.json").exists());
+        assert!(!state.path().join("audit-log.jsonl").exists());
+    }
+
+    // ── AC2/AC3/AC10: premise checks and exit codes ─────────────────────────
+
+    #[test]
+    fn switch_apply_without_key_file_is_exit2_key_absent() {
+        let state = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap(); // empty store
+        let root = TempDir::new().unwrap();
+        let code = run_switch(
+            &switch_args("kimi", None, true, ms::SwitchVia::Restart, false),
+            state.path(),
+            root.path(),
+            Some(keys.path()),
+            SessionBackend::Claude,
+        )
+        .unwrap();
+        assert_eq!(code, 2);
+        let msg = err_key_absent(Runtime::Kimi);
+        assert!(msg.contains("[E-KEY-ABSENT]"));
+        assert!(msg.contains("bathos key set kimi"));
+        assert!(!state.path().join("model-status.json").exists());
+    }
+
+    #[test]
+    fn switch_codex_is_exit2_unsupported_with_set_guidance() {
+        let state = TempDir::new().unwrap();
+        let code = run_switch(
+            &switch_args("codex", None, false, ms::SwitchVia::Restart, false),
+            state.path(),
+            state.path(),
+            None,
+            SessionBackend::Claude,
+        )
+        .unwrap();
+        assert_eq!(code, 2);
+        let msg = err_switch_unsupported();
+        assert!(msg.contains("[E-MODEL-SWITCH-UNSUPPORTED]"));
+        assert!(msg.contains("bathos model set"));
+    }
+
+    #[test]
+    fn switch_invalid_runtime_is_exit2_reusing_existing_code_wording() {
+        assert!(Runtime::parse("bogus")
+            .unwrap_err()
+            .contains("[E-MODEL-RUNTIME-INVALID]"));
+        let state = TempDir::new().unwrap();
+        let code = run_switch(
+            &switch_args("bogus", None, false, ms::SwitchVia::Restart, false),
+            state.path(),
+            state.path(),
+            None,
+            SessionBackend::Claude,
+        )
+        .unwrap();
+        assert_eq!(code, 2);
+    }
+
+    // ── AC4: Tier-R apply records status + audit, never key material ────────
+
+    #[test]
+    fn switch_apply_glm_records_status_and_audit_without_key_material() {
+        let state = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        write_key_file(keys.path(), "glm", 0o600);
+        let code = run_switch(
+            &switch_args("glm", None, true, ms::SwitchVia::Restart, false),
+            state.path(),
+            root.path(),
+            Some(keys.path()),
+            SessionBackend::Claude,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+
+        let (status, warnings) = ms::load(state.path());
+        assert!(warnings.is_empty());
+        let plan = status.last_switch_plan.expect("plan recorded");
+        assert_eq!(plan.target, Runtime::Glm);
+        assert_eq!(plan.via, ms::SwitchVia::Restart);
+        assert!(
+            !plan.verified,
+            "apply records verified=false — verification is model status's job (AC9)"
+        );
+        assert_eq!(
+            status.session_backend,
+            SessionBackend::Claude,
+            "session_backend stamps the backend measured at apply time, not the target"
+        );
+
+        let audit = std::fs::read_to_string(state.path().join("audit-log.jsonl")).unwrap();
+        assert!(audit.contains("\"model.switch\""));
+        assert!(audit.contains("glm/restart"));
+        assert!(
+            !audit.contains(FAKE_KEY),
+            "key material must never enter the audit chain"
+        );
+        let status_raw = std::fs::read_to_string(state.path().join("model-status.json")).unwrap();
+        assert!(!status_raw.contains(FAKE_KEY));
+        bathos_state::audit::verify_chain(&state.path().join("audit-log.jsonl")).unwrap();
+    }
+
+    // ── AC8 + lead backport: the claude return path ─────────────────────────
+
+    #[test]
+    fn switch_apply_claude_blanks_shadow_env_and_preserves_everything_else() {
+        let state = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let settings = root.path().join(".claude/settings.local.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(&settings, injected_settings_json()).unwrap();
+
+        let code = run_switch(
+            &switch_args("claude", None, true, ms::SwitchVia::Restart, false),
+            state.path(),
+            root.path(),
+            None,
+            SessionBackend::Glm, // measured: this shell still carries the GLM env
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        let env = doc["env"].as_object().unwrap();
+        // Overwritten with "" — present-but-empty (removal would be the forbidden pattern:
+        // env removal never reaches a live session [measured M3]).
+        assert!(env.contains_key("ANTHROPIC_BASE_URL"));
+        assert_eq!(env["ANTHROPIC_BASE_URL"], "");
+        assert!(env.contains_key("ANTHROPIC_AUTH_TOKEN"));
+        assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "");
+        assert_eq!(
+            env["ANTHROPIC_API_KEY"], "",
+            "already-empty key stays as-is"
+        );
+        // Everything else byte-value-preserved.
+        assert_eq!(env["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1");
+        assert_eq!(env["API_TIMEOUT_MS"], "3000000");
+        assert_eq!(doc["permissions"]["allow"].as_array().unwrap().len(), 2);
+        assert_eq!(doc["enableAllProjectMcpServers"], false);
+
+        let (status, _) = ms::load(state.path());
+        let plan = status.last_switch_plan.unwrap();
+        assert_eq!(plan.target, Runtime::Claude);
+        assert_eq!(status.transient_injection, None);
+        let audit = std::fs::read_to_string(state.path().join("audit-log.jsonl")).unwrap();
+        assert!(audit.contains("claude/restart"));
+        assert!(
+            !audit.contains("GLM-TOKEN-PLAINTEXT"),
+            "settings values must never enter the audit chain"
+        );
+    }
+
+    #[test]
+    fn switch_apply_claude_clears_stale_transient_injection_without_settings_file() {
+        let state = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap(); // no settings.local.json at all
+        let status = ms::ModelStatus {
+            transient_injection: Some(ms::TransientInjection {
+                target: Runtime::Glm,
+                injected_at: chrono::Utc::now(),
+            }),
+            ..Default::default()
+        };
+        ms::save(state.path(), &status).unwrap();
+
+        let code = run_switch(
+            &switch_args("claude", None, true, ms::SwitchVia::Restart, false),
+            state.path(),
+            root.path(),
+            None,
+            SessionBackend::Claude,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        let (status, _) = ms::load(state.path());
+        assert_eq!(status.transient_injection, None, "E15 residue consumed");
+    }
+
+    #[test]
+    fn switch_apply_claude_with_unparseable_settings_is_exit1_and_file_untouched() {
+        let state = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let settings = root.path().join(".claude/settings.local.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        let broken = "{ this is not json";
+        std::fs::write(&settings, broken).unwrap();
+
+        let code = run_switch(
+            &switch_args("claude", None, true, ms::SwitchVia::Restart, false),
+            state.path(),
+            root.path(),
+            None,
+            SessionBackend::Glm,
+        )
+        .unwrap();
+        assert_eq!(code, 1);
+        assert_eq!(
+            std::fs::read_to_string(&settings).unwrap(),
+            broken,
+            "E3: an unparseable file is never overwritten"
+        );
+        assert!(
+            !state.path().join("model-status.json").exists(),
+            "a refused return must not record a half-applied plan"
+        );
+    }
+
+    // ── AC1 placeholder: --via settings is story M5 ─────────────────────────
+
+    #[test]
+    fn switch_via_settings_on_env_global_target_is_not_open_exit0_no_writes() {
+        let state = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let code = run_switch(
+            &switch_args("glm", None, true, ms::SwitchVia::Settings, false),
+            state.path(),
+            root.path(),
+            None,
+            SessionBackend::Claude,
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        assert!(!state.path().join("model-status.json").exists());
+        assert!(!state.path().join("audit-log.jsonl").exists());
+    }
+
+    // ── paste-command generation (AC4/AC6/AC7/AC8) ──────────────────────────
+
+    #[test]
+    fn paste_commands_glm_reuses_existing_script_no_raw_export_no_pin_line_without_model() {
+        let lines = switch_paste_commands(Runtime::Glm, None);
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("source ~/.bathos/glm.env && source scripts/glm-env.sh")));
+        assert!(lines.last().unwrap().contains("claude --continue"));
+        assert!(!lines.iter().any(|l| l.contains("ANTHROPIC_MODEL")));
+        assert!(
+            !lines.iter().any(|l| l.contains("ANTHROPIC_BASE_URL=")),
+            "glm rides the existing script — no raw export line"
+        );
+    }
+
+    #[test]
+    fn paste_commands_kimi_names_auth_token_and_store_var() {
+        let lines = switch_paste_commands(Runtime::Kimi, None);
+        // The actual export line, not the `# ... raw export` comment line.
+        let export = lines.iter().find(|l| l.starts_with("source")).unwrap();
+        assert!(export.contains("https://api.moonshot.ai/anthropic"));
+        assert!(export.contains("ANTHROPIC_AUTH_TOKEN=\"$BATHOS_KIMI_KEY\""));
+    }
+
+    #[test]
+    fn paste_commands_deepseek_names_api_key_not_auth_token() {
+        let lines = switch_paste_commands(Runtime::Deepseek, None);
+        let export = lines.iter().find(|l| l.starts_with("source")).unwrap();
+        assert!(export.contains("https://api.deepseek.com/anthropic"));
+        assert!(export.contains("ANTHROPIC_API_KEY=\"$BATHOS_DEEPSEEK_KEY\""));
+        assert!(!export.contains("ANTHROPIC_AUTH_TOKEN"));
+    }
+
+    #[test]
+    fn paste_commands_qwen_refuses_to_invent_endpoint_and_prints_both_shapes() {
+        let lines = switch_paste_commands(Runtime::Qwen, None);
+        let joined = lines.join("\n");
+        assert!(joined.contains("<엔드포인트 미확정"));
+        assert!(joined.contains("$BATHOS_QWEN_KEY"));
+        // Both attested URL shapes (verbatim from env_endpoint_hint) — never one as fact.
+        assert!(joined.contains("dashscope"));
+        assert!(joined.contains("maas.aliyuncs.com"));
+    }
+
+    #[test]
+    fn paste_commands_model_pin_adds_anthropic_model_export() {
+        let lines = switch_paste_commands(Runtime::Glm, Some("glm-5.3"));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("export ANTHROPIC_MODEL=\"glm-5.3\"")));
+    }
+
+    #[test]
+    fn return_paste_commands_glm_uses_unset_script_others_raw_unset_clean_needs_none() {
+        let glm = return_paste_commands(SessionBackend::Glm);
+        assert!(glm.iter().any(|l| l.contains("scripts/glm-env.sh --unset")));
+        assert!(glm.last().unwrap().contains("claude --continue"));
+
+        let deepseek = return_paste_commands(SessionBackend::Deepseek);
+        let unset = deepseek.iter().find(|l| l.starts_with("unset ")).unwrap();
+        assert!(
+            unset.contains("ANTHROPIC_API_KEY"),
+            "glm-env.sh --unset leaves ANTHROPIC_API_KEY set [script line 6] — raw unset needed"
+        );
+        // No *command* line invokes the glm script (the explanatory comment mentioning it
+        // is fine — only executable lines matter for paste safety).
+        assert!(!deepseek
+            .iter()
+            .any(|l| l.trim_start().starts_with("scripts/glm-env.sh")));
+
+        let clean = return_paste_commands(SessionBackend::Claude);
+        assert!(!clean.iter().any(|l| l.starts_with("unset ")));
+        assert!(!clean.iter().any(|l| l.contains("--unset")));
+    }
+
+    // ── key probe: existence + permission, content never read ───────────────
+
+    #[test]
+    fn key_file_status_reports_presence_and_permission_only() {
+        let dir = TempDir::new().unwrap();
+        assert!(!key_file_status(&dir.path().join("glm.env")).present);
+
+        write_key_file(dir.path(), "glm", 0o600);
+        let ok = key_file_status(&dir.path().join("glm.env"));
+        assert!(ok.present);
+        assert!(ok.perm_ok);
+        assert_eq!(ok.perm, Some(0o600));
+
+        write_key_file(dir.path(), "kimi", 0o644);
+        let loose = key_file_status(&dir.path().join("kimi.env"));
+        assert!(loose.present);
+        assert!(
+            !loose.perm_ok,
+            "E1: non-0600 is perm_ok=false (warning, never a block)"
+        );
+    }
+
+    // ── settings.local.json shadow-key logic ────────────────────────────────
+
+    #[test]
+    fn collect_shadow_keys_ignores_missing_env_and_empty_values() {
+        let doc: serde_json::Value = serde_json::from_str(
+            r#"{"permissions":{},"env":{"OTHER":"x","ANTHROPIC_AUTH_TOKEN":""}}"#,
+        )
+        .unwrap();
+        assert!(collect_shadow_keys(&doc).is_empty());
+        assert!(collect_shadow_keys(&serde_json::json!({})).is_empty());
+        let doc2: serde_json::Value = serde_json::from_str(
+            r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic"}}"#,
+        )
+        .unwrap();
+        assert_eq!(collect_shadow_keys(&doc2), vec!["ANTHROPIC_BASE_URL"]);
+    }
+
+    #[test]
+    fn clear_settings_env_noop_cases_never_write() {
+        let dir = TempDir::new().unwrap();
+        // Absent file → Ok(empty), file stays absent.
+        assert!(clear_settings_env(&dir.path().join("none.json"))
+            .unwrap()
+            .is_empty());
+        assert!(!dir.path().join("none.json").exists());
+
+        // All shadow keys absent-or-empty → file byte-identical (no-op write forbidden).
+        let path = dir.path().join("empty.json");
+        std::fs::write(
+            &path,
+            r#"{"env":{"ANTHROPIC_BASE_URL":"","ANTHROPIC_API_KEY":""},"model":"x"}"#,
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(clear_settings_env(&path).unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn clear_settings_env_refuses_unparseable_file_and_leaves_it_byte_identical() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("broken.json");
+        std::fs::write(&path, "{ broken").unwrap();
+        match clear_settings_env(&path) {
+            Err(SettingsError::Unparseable(_)) => {}
+            other => panic!("expected Unparseable, got {other:?}"),
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ broken");
+    }
+
+    // ── AC9: model status verification ──────────────────────────────────────
+
+    #[test]
+    fn status_marks_verified_on_match_and_unverified_on_mismatch() {
+        let state = TempDir::new().unwrap();
+        glm_plan_status(state.path());
+
+        // Match: env says glm → verified=true persisted, exit 0.
+        let code = run_status(
+            false,
+            state.path(),
+            None,
+            Some("https://api.z.ai/api/anthropic"),
+        )
+        .unwrap();
+        assert_eq!(code, 0);
+        let (loaded, _) = ms::load(state.path());
+        assert!(loaded.last_switch_plan.as_ref().unwrap().verified);
+        assert_eq!(loaded.session_backend, SessionBackend::Glm);
+
+        // Mismatch: env back to unset-claude → verified flips false, still exit 0.
+        let code = run_status(false, state.path(), None, None).unwrap();
+        assert_eq!(code, 0);
+        let (loaded, _) = ms::load(state.path());
+        assert!(!loaded.last_switch_plan.as_ref().unwrap().verified);
+    }
+
+    #[test]
+    fn status_without_plan_is_read_only() {
+        let state = TempDir::new().unwrap();
+        let keys = TempDir::new().unwrap();
+        write_key_file(keys.path(), "kimi", 0o644);
+        let code = run_status(true, state.path(), Some(keys.path()), None).unwrap();
+        assert_eq!(code, 0);
+        assert!(
+            !state.path().join("model-status.json").exists(),
+            "no plan → nothing to verify → no write"
+        );
     }
 }
