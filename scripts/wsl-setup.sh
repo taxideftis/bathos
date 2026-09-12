@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
-# BATHOS — wsl-setup.sh   (WSL 프리플라이트 · 복구)
-# WSL(Windows Subsystem for Linux)에서 BATHOS를 쓰기 전에 한 번 실행한다.
+# BATHOS — wsl-setup.sh   (WSL preflight · repair)
+# Run this once before using BATHOS on WSL (Windows Subsystem for Linux).
 #
-#   ./scripts/wsl-setup.sh            점검 + 복구(줄바꿈 LF 정규화·실행비트)
-#   ./scripts/wsl-setup.sh --check    점검만(수정하지 않음)
+#   ./scripts/wsl-setup.sh            check + repair (normalize line endings to LF, exec bit)
+#   ./scripts/wsl-setup.sh --check    check only (changes nothing)
 #
-# 배경: WSL은 리눅스 환경이므로 BATHOS의 **bash 버전(.sh 훅 + 리눅스 `bathos`
-# 바이너리)** 을 그대로 쓴다(Windows PowerShell 포트 .ps1은 WSL에서 불필요).
-# 유일한 함정은 저장소를 **Windows에서 CRLF로 클론**한 경우 — `.sh`의 shebang이
-# `#!/usr/bin/env bash^M`이 되어 `bad interpreter` 오류가 난다. `.gitattributes`가
-# 앞으로는 이를 막지만, 이미 CRLF로 받은 트리를 이 스크립트가 LF로 복구한다.
+# Background: WSL is a Linux environment, so it uses BATHOS's **bash edition (.sh hooks
+# plus the Linux `bathos` binary)** as-is (the Windows PowerShell port .ps1 is not needed here).
+# The one trap is a repo **cloned with CRLF on Windows** — the shebang of a `.sh` becomes
+# `#!/usr/bin/env bash^M` and you get a `bad interpreter` error. `.gitattributes` prevents
+# that from now on, but a tree that already arrived as CRLF is repaired to LF by this script.
 #
-# 안전: 아무것도 삭제하지 않는다. .sh 파일의 CR 제거 + 실행비트 부여만 한다(멱등).
-# 이식성: bash 3.2+(macOS 기본) 호환 — mapfile/연관배열 미사용.
+# Safety: deletes nothing. It only strips CR from .sh files and grants the exec bit (idempotent).
+# Portability: bash 3.2+ compatible (the macOS default) — no mapfile, no associative arrays.
 # =============================================================================
 set -uo pipefail
 
@@ -25,7 +25,7 @@ say()  { printf '\033[0;36m[bathos-wsl]\033[0m %s\n' "$*"; }
 warn() { printf '\033[0;33m[bathos-wsl] ⚠ %s\033[0m\n' "$*" >&2; }
 ok()   { printf '\033[0;32m[bathos-wsl] ✓ %s\033[0m\n' "$*"; }
 
-# 제품 트리의 .sh 파일을 나열(core/target·.git·node_modules 제외).
+# List the .sh files in the product tree (excluding core/target, .git, node_modules).
 list_sh() {
   find "$PKG_ROOT" -type f -name '*.sh' \
     -not -path '*/core/target/*' \
@@ -33,7 +33,7 @@ list_sh() {
     -not -path '*/node_modules/*' 2>/dev/null | sort
 }
 
-# --- 1. WSL 여부 안내 (강제는 아님 — 리눅스/macOS에서도 무해하게 동작) -----------
+# --- 1. Report whether this is WSL (not enforced — harmless on Linux/macOS too) --
 if grep -qiE '(microsoft|wsl)' /proc/version 2>/dev/null; then
   say "WSL 환경 감지됨 — BATHOS는 여기서 bash(.sh) 버전으로 동작합니다."
 else
@@ -43,7 +43,7 @@ fi
 TOTAL_SH="$(list_sh | wc -l | tr -d ' ')"
 say "검사 대상 .sh: ${TOTAL_SH}개"
 
-# --- 2. CRLF 탐지 + (복구 모드면) LF 정규화 --------------------------------------
+# --- 2. Detect CRLF and, in repair mode, normalize to LF -------------------------
 crlf_count=0
 fixed_count=0
 while IFS= read -r f; do
@@ -74,7 +74,7 @@ else
   say "$fixed_count개 파일을 LF로 정규화했습니다."
 fi
 
-# --- 3. 실행비트 부여 (복구 모드) ------------------------------------------------
+# --- 3. Set the exec bit (repair mode) -------------------------------------------
 if [ "$CHECK_ONLY" -eq 0 ]; then
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -83,15 +83,15 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
   ok ".sh 실행비트 확인/부여 완료."
 fi
 
-# --- 4. 의존성 점검 (WSL=리눅스 → apt 안내) --------------------------------------
+# --- 4. Dependency check (WSL is Linux -> apt hints) -----------------------------
 say "의존성 점검:"
 if command -v cargo >/dev/null 2>&1; then ok "cargo 있음 ($(cargo --version 2>/dev/null | awk '{print $2}'))"; else warn "Rust 미설치 — https://rustup.rs (WSL 안에서 설치). 엔진 빌드에 필요."; fi
 if command -v jq >/dev/null 2>&1; then ok "jq 있음"; else warn "jq 미설치 — 'sudo apt-get update && sudo apt-get install -y jq' (bash 훅의 JSON 파싱에 필요)."; fi
 if command -v claude >/dev/null 2>&1; then ok "claude CLI 있음"; else warn "Claude Code CLI 미발견 — WSL 안에 설치된 Claude Code로 실행하세요(v2.1.32+)."; fi
 
-# --- 5. 엔진 바이너리 상태 -------------------------------------------------------
-# WSL은 리눅스이므로 네이티브 바이너리는 `bathos`(ELF)다. 실수의 핵심은 Windows에서
-# 빌드한 `bathos.exe`(PE)를 WSL로 들고 오는 것 — OS 무관하게 그 경우만 경고한다.
+# --- 5. Engine binary status -----------------------------------------------------
+# WSL is Linux, so the native binary is `bathos` (ELF). The classic mistake is carrying a
+# `bathos.exe` (PE) built on Windows into WSL — we warn about exactly that case, on any OS.
 LINUX_BIN="$PKG_ROOT/core/target/release/bathos"
 if [ -x "$LINUX_BIN" ]; then
   btype="$(file "$LINUX_BIN" 2>/dev/null || true)"
@@ -104,7 +104,7 @@ else
   say "엔진 미빌드 — WSL 안에서: cd core && cargo build --release  (→ core/target/release/bathos)"
 fi
 
-# --- 6. 다음 단계 ----------------------------------------------------------------
+# --- 6. Next steps ---------------------------------------------------------------
 printf '\n'
 say "다음 단계(WSL):"
 printf '  1) 엔진 빌드:   cd core && cargo build --release && cd ..\n'
