@@ -46,6 +46,7 @@ pub mod error;
 pub mod fingerprint;
 pub mod model;
 pub mod model_plan;
+pub mod model_status;
 pub mod runtime_host;
 pub mod schema;
 pub mod store;
