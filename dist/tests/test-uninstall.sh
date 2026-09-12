@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
 # BATHOS Dynamis — dist/tests/test-uninstall.sh
-# Story B4 §5 "dry-run 모드가 곧 테스트 하니스다" — 픽스처 4종.
-#   ① 픽스처 외부 상태 생성 -> dry-run 출력이 전 대상을 나열
-#   ② --yes 실행 -> 실제 제거 + [removed] 로그
-#   ③ 대상 없음 -> 빈 상태 안내
-#   ④ 쓰기 불가 파일 1개 -> 부분 실패 분리 표기
+# Story B4 §5 "dry-run mode is the test harness" — four fixtures.
+#   (1) fixture creates external state -> dry-run output lists every target
+#   (2) run with --yes                 -> really removes + [removed] log
+#   (3) nothing to remove              -> reports the empty state
+#   (4) one unwritable file            -> partial failure reported separately
 #
-# 실제 $HOME/_state를 절대 건드리지 않는다 — 전부 격리된 임시 디렉터리로
-# BATHOS_ROOT/BATHOS_STATE_DIR/BATHOS_HOME/BATHOS_CONFIG_DIR를 오버라이드한다.
+# The real $HOME/_state is never touched — BATHOS_ROOT/BATHOS_STATE_DIR/
+# BATHOS_HOME/BATHOS_CONFIG_DIR are all overridden to isolated temp directories.
 # =============================================================================
 set -uo pipefail
 
@@ -24,7 +24,7 @@ new_fixture_root() {
 }
 
 # ---------------------------------------------------------------------------
-# ① dry-run: 외부 상태가 있으면 전 대상을 나열하고 아무것도 지우지 않는다
+# (1) dry-run: when external state exists, list every target and delete nothing
 # ---------------------------------------------------------------------------
 test_dry_run_lists_all() {
   local root state home
@@ -54,7 +54,7 @@ test_dry_run_lists_all() {
 }
 
 # ---------------------------------------------------------------------------
-# ② --yes 실행: 실제 제거 + [removed] 로그
+# (2) run with --yes: really removes, and logs [removed]
 # ---------------------------------------------------------------------------
 test_yes_actually_removes() {
   local root state home
@@ -83,7 +83,7 @@ test_yes_actually_removes() {
 }
 
 # ---------------------------------------------------------------------------
-# ③ 대상 없음: 빈 상태 안내
+# (3) nothing to remove: reports the empty state
 # ---------------------------------------------------------------------------
 test_empty_state_message() {
   local root state home
@@ -105,7 +105,7 @@ test_empty_state_message() {
 }
 
 # ---------------------------------------------------------------------------
-# ④ 쓰기 불가 파일: 부분 실패 분리 표기(성공/실패 카운트 분리)
+# (4) unwritable file: partial failure reported separately (success/fail counts split)
 # ---------------------------------------------------------------------------
 test_partial_failure_reported() {
   local root state home
@@ -113,15 +113,15 @@ test_partial_failure_reported() {
   state="$root/_state"; mkdir -p "$state"
   home="$root/home"; mkdir -p "$home/.claude"
   echo '{"plan_mode": true}' > "$state/session-flags.json"
-  # 쓰기 불가 디렉터리를 만들어 두 번째 대상(설정 statusLine 편집)에서 실패를 유도.
+  # Make the directory unwritable so the second target (editing the statusLine setting) fails.
   echo '{"statusLine": {"command": "bathos statusline"}}' > "$home/.claude/settings.json"
-  chmod 555 "$home/.claude"   # 디렉터리 쓰기 금지 -> 백업 파일(.bak) 생성 실패 유도
+  chmod 555 "$home/.claude"   # no writes allowed in the dir -> forces the .bak backup to fail
 
   local out
   out="$(BATHOS_ROOT="$root" BATHOS_STATE_DIR="$state" BATHOS_HOME="$home" bash "$UNINSTALL" --yes 2>&1)"
   local rc=$?
 
-  chmod 755 "$home/.claude"   # 정리 전 복구(rm -rf 위해)
+  chmod 755 "$home/.claude"   # restore before cleanup (so the recursive remove can succeed)
 
   if echo "$out" | grep -q "\[fail" && echo "$out" | grep -q "\[removed\]"; then
     pass "④ 부분 실패가 성공/실패 분리 표기됨"

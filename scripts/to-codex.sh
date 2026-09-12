@@ -1,63 +1,63 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# BATHOS  scripts/to-codex.sh  —  Claude Code 자산 → OpenAI Codex CLI dual-emit
+# BATHOS  scripts/to-codex.sh  —  Claude Code assets -> OpenAI Codex CLI dual-emit
 #
-# 무엇을·왜 (intro):
-#   정본은 항상 `.claude/commands/*.md`·`.claude/agents/_base/*.md`이고, 이 스크립트는
-#   그 정본을 **읽기만** 한다(project-context-kr.md#2.6 "Claude 경로 회귀 0" — W5 동결).
-#   출력은 네 타깃으로 나뉜다:
-#     1) 레거시 스캐폴드(하위호환, story-05 AC#6): <dest>/prompts/*.md, <dest>/agents/*.toml
-#        — 기존 동작 그대로(기본 dest=./.codex-out), TOML만 리터럴 `'''`+spawnable 필터 적용(§3).
-#        model 필드는 여기선 계속 `# TODO` 주석(레거시는 미리보기 스캐폴드일 뿐 정본 배포 경로가 아님).
-#     2) skills 정본(D6 — `.codex/skills` 아님): $REPO_ROOT/.agents/skills/<name>/SKILL.md
-#        `--write` 시 자동 방출(레포 내부 경로라 추가 동의 불필요).
-#     3) prompts 과도기: ~/.codex/prompts/<name>.md — `--emit-prompts` 명시 시에만(홈 디렉터리
-#        쓰기는 사용자 승인 사안 — story-05 하위작업 1항).
-#     4) agents 정본(CT-SUBAGENT, story-11 — Stephen 요청 §8): <repo>/.codex/agents/<slug>.toml
-#        `--write` 시 자동 방출(레포 내부). skills 정본과 같은 D6류 이중경로 패턴(legacy+canonical) —
-#        레거시(1)와 달리 여기는 **model 필드에 실값을 기입**한다(stephen-model-mapping.md §1 룩업,
-#        리드 v0.145.0+ 채택 확정) + story-09 오케스트레이션 표준 문구(블록 A+B, stephen-orchestration.md
-#        §"TOML/skills 삽입 위치" 지정대로 A+B만)를 developer_instructions 말미에 append한다. 두 텍스트는
-#        전부 정본 문서에서 그대로 복사한 상수다(재작문 금지 — 표현 드리프트가 곧 정본 붕괴, 두 문서
-#        모두 명시).
+# What & why (intro):
+#   The canonical sources are always `.claude/commands/*.md` and `.claude/agents/_base/*.md`, and this
+#   script **only reads** them (project-context-kr.md#2.6 "zero regression on the Claude path" — W5 freeze).
+#   The output splits into four targets:
+#     1) legacy scaffold (backwards compat, story-05 AC#6): <dest>/prompts/*.md, <dest>/agents/*.toml
+#        — behaviour unchanged (default dest=./.codex-out); only the TOML gets the literal `'''` + spawnable filter (§3).
+#        here the model field stays a `# TODO` comment (legacy is only a preview scaffold, not a release path).
+#     2) canonical skills (D6 — NOT `.codex/skills`): $REPO_ROOT/.agents/skills/<name>/SKILL.md
+#        emitted automatically on `--write` (an in-repo path, so no extra consent is needed).
+#     3) transitional prompts: ~/.codex/prompts/<name>.md — only with an explicit `--emit-prompts` (writing to
+#        the home directory is a matter of user consent — story-05, subtask 1).
+#     4) canonical agents (CT-SUBAGENT, story-11 — Stephen's request §8): <repo>/.codex/agents/<slug>.toml
+#        emitted automatically on `--write` (in-repo). Same D6-style dual-path pattern as the canonical skills (legacy+canonical) —
+#        unlike legacy (1), this one **writes a real value into the model field** (stephen-model-mapping.md §1 lookup,
+#        the lead's confirmed v0.145.0+ adoption) plus the story-09 standard orchestration text (blocks A+B, stephen-orchestration.md
+#        §"TOML/skills insertion points" specifies A+B only), appended at the end of developer_instructions. Both texts are
+#        constants copied verbatim from the canonical documents (do not rewrite — wording drift is canon collapse; both
+#        documents state this explicitly).
 #
-#   방출 대상 3분류(근거: .agent-team/08-impl-notes/andrew-command-classification.md, story-04 SS5):
-#     - 팀 스폰형 15개(Task 툴 사용) → 이 스크립트가 만들지 않는다. story-10에서 수기(hand-authored)
-#       SKILL.md를 직접 쓰고 scripts/codex-skills-drift-exclusions.json에 등재해 재생성 대상에서 뺀다.
-#       (주의: `scripts/drift-exclusions.json`은 **이미 존재**하는 별개 파일 — docs i18n drift-guard
-#       `check-rule-copies.sh`가 소유·소비 중이라 이름 충돌을 피해 새 파일명을 쓴다. 상세 근거는
+#   Three emission classes (rationale: .agent-team/08-impl-notes/andrew-command-classification.md, story-04 SS5):
+#     - the 15 team-spawning ones (they use the Task tool) -> this script does not create them. story-10 writes their
+#       SKILL.md by hand (hand-authored) and registers them in scripts/codex-skills-drift-exclusions.json, out of regeneration.
+#       (Careful: `scripts/drift-exclusions.json` is a separate file that **already exists** — the docs i18n drift-guard
+#       `check-rule-copies.sh` owns and consumes it, so a new filename avoids the clash. Detailed rationale in
 #       andrew-command-classification.md#8.)
-#     - 별칭 4개(save/resume/context-save/context-restore) → skills 타깃에서는 정본(save-session/
-#       cold-start)으로 병합(중복 skill 노출 방지, US8-AC1). prompts 타깃(레거시+과도기 둘 다)에는
-#       그대로 포함 — 결정론 폴백은 별칭까지 살아 있어야 의미가 있다.
-#     - remote-dev 1개 → Claude 전용 기능(Remote Control) 가이드라 Codex 대응 기능이 없다. skills
-#       타깃에서 제외(과장 방지, project-context-kr.md#2.5). prompts 타깃엔 AC#1 문언대로 포함.
-#     → skills 최종 노출 수 = 15(수기) + 15(이 스크립트 generated) = 30 (분류표 §5 확정치).
+#     - the 4 aliases (save/resume/context-save/context-restore) -> in the skills target they merge into the canonical
+#       names (save-session/cold-start) so no duplicate skill is exposed (US8-AC1). In the prompts target (both legacy
+#       and transitional) they are kept — a deterministic fallback only means something if the aliases live too.
+#     - remote-dev (1) -> it is a guide to a Claude-only feature (Remote Control), which Codex has no counterpart for.
+#       Excluded from the skills target (no overclaiming, project-context-kr.md#2.5); included in prompts per AC#1's wording.
+#     -> final number of exposed skills = 15 (hand-authored) + 15 (generated here) = 30 (the classification table's §5 figure).
 #
-#   description 3부(요약/TRIGGER/NOT, CT-SKILL §7)는 `.claude/commands`를 건드리지 않고 이 스크립트가
-#   **결정론적으로 합성**한다(trigger_for/not_for 표, 아래). 출처 없는 자연어 트리거는 날조하지 않는다 —
-#   CLAUDE.md §8/§8.1 또는 각 커맨드 자체 "자연어 트리거" 각주가 없으면 "명시 멘션만"으로 정직 표기한다
-#   (project-context-kr.md#2.5). 이 합성이 매 실행 동일 출력을 내므로(비결정 요소 없음) "generated" 자격은
-#   유지된다 — 멱등(AC#4)은 "정본과 바이트가 같다"가 아니라 "이 스크립트를 다시 돌리면 같은 결과"다.
+#   The 3-part description (summary/TRIGGER/NOT, CT-SKILL §7) is synthesised **deterministically** by this script
+#   without touching `.claude/commands` (the trigger_for/not_for tables, below). Unsourced natural-language triggers are
+#   never invented — without a CLAUDE.md §8/§8.1 entry or the command's own "natural-language trigger" footnote, we
+#   honestly write "explicit mention only" (project-context-kr.md#2.5). Since the synthesis emits the same output every
+#   run (nothing nondeterministic), it keeps the "generated" status — idempotence (AC#4) is not "byte-equal to canon" but "re-run this script, same result".
 #
-#   프로젝트 경로 인자 처리: 원본 커맨드는 대부분 `$1`(프로젝트 절대경로, 대개 선택)을 받지만 Codex
-#   skills에는 인자 치환이 없다(L4, 이슈 #15316). 그래서 skills 본문에는 매번 동일한 안내 배너를
-#   앞머리에 붙여, 본문에 남은 `$1` 토큰을 "항상 현재 작업 디렉터리(cwd)"로 읽도록 명시한다(F1: Codex는
-#   레포 루트에서 실행되는 것이 기본 전제). 문장 단위로 `$1`을 치환하지 않는 이유: 조사·어미가 붙은
-#   한국어 문장을 정규식으로 재작문하면 의미가 깨질 위험이 실익보다 크다 — 배너 1회 고지가 더 정직하다.
+#   Handling the project-path argument: most original commands accept `$1` (the project's absolute path, usually
+#   optional), but Codex skills have no argument substitution (L4, issue #15316). So every skill body gets the same
+#   banner prepended, stating that any `$1` token left in the body must be read as "always the current working
+#   directory (cwd)" (F1: the base assumption is that Codex runs from the repo root). Why `$1` is not substituted
+#   sentence by sentence: rewriting Korean prose (with its particles and endings) by regex risks breaking the meaning more than it gains — one banner notice is more honest.
 #
-# 사용:
-#   bash scripts/to-codex.sh                              # dry-run(미리보기, 전체)
-#   bash scripts/to-codex.sh --write                       # 레거시 스캐폴드 + skills 정본 실제 생성
-#   bash scripts/to-codex.sh --write --emit-prompts        # + ~/.codex/prompts 과도기 방출(홈 쓰기 동의)
-#   bash scripts/to-codex.sh --write --dest ~/.codex-out2  # 레거시 스캐폴드 위치 지정
-#   bash scripts/to-codex.sh --write --skills-root <dir>   # skills 출력 위치 재지정(주로 drift 검사용)
-#   bash scripts/to-codex.sh --write --agents-root <dir>   # agents 정본 출력 위치 재지정(기본 .codex/agents)
+# Usage:
+#   bash scripts/to-codex.sh                              # dry-run (preview, everything)
+#   bash scripts/to-codex.sh --write                       # really create the legacy scaffold + canonical skills
+#   bash scripts/to-codex.sh --write --emit-prompts        # + transitional ~/.codex/prompts emission (consent to write to home)
+#   bash scripts/to-codex.sh --write --dest ~/.codex-out2  # choose where the legacy scaffold goes
+#   bash scripts/to-codex.sh --write --skills-root <dir>   # redirect the skills output (mainly for the drift check)
+#   bash scripts/to-codex.sh --write --agents-root <dir>   # redirect the canonical agents output (default .codex/agents)
 #
-# 철칙: 날조 금지. model 은 원본(claude-*)을 주석으로 보존하고, Codex 모델은
-#       사용자가 지정하도록 비워 둔다(임의 모델명 삽입 금지 — SS10 매핑표 확정 전 공란).
-#       멱등: `--write` 2회 연속 실행 시 방출물 diff 0(US13-AC1 — 타임스탬프 등 비결정 요소 금지).
-#       bash 3.2 호환(macOS 기본) — jq 금지, grep/sed/awk 네이티브 파싱만(project-context-kr.md#1).
+# Hard rule: no fabrication. The model field preserves the original (claude-*) as a comment, and the
+#       Codex model is left blank for the user to fill in (never insert an arbitrary model name — blank until the SS10 mapping table is settled).
+#       Idempotence: two `--write` runs back to back yield a zero diff (US13-AC1 — no timestamps or other nondeterminism).
+#       bash 3.2 compatible (the macOS default) — no jq, native grep/sed/awk parsing only (project-context-kr.md#1).
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -92,15 +92,15 @@ say(){ printf '%s\n' "$*"; }
 [ "$WRITE" = "1" ] && say "== 실제 생성 → $DEST (+ skills: $SKILLS_ROOT) ==" || say "== DRY-RUN(미리보기) — 실제 생성하려면 --write =="
 
 # ---------------------------------------------------------------------------
-# §1. frontmatter/본문 파서 (기존 헬퍼 재사용 — 재발명 금지)
+# §1. frontmatter/body parser (reuse the existing helpers — do not reinvent)
 # ---------------------------------------------------------------------------
-# frontmatter 값 추출(첫 --- 블록에서 key: value, 인라인 주석 제거)
+# Extract a frontmatter value (key: value from the first --- block, inline comments stripped)
 fm_val(){ # $1=file $2=key
   awk -v k="$2" '
     NR==1 && $0 ~ /^---[[:space:]]*$/ {inf=1; next}
     inf && $0 ~ /^---[[:space:]]*$/ {exit}
     inf {
-      line=$0; sub(/#.*/,"",line)                       # 인라인 주석 제거
+      line=$0; sub(/#.*/,"",line)                       # strip the inline comment
       if (line ~ "^[[:space:]]*" k "[[:space:]]*:") {
         sub("^[[:space:]]*" k "[[:space:]]*:[[:space:]]*","",line)
         gsub(/^[[:space:]]+|[[:space:]]+$/,"",line)
@@ -109,7 +109,7 @@ fm_val(){ # $1=file $2=key
       }
     }' "$1"
 }
-# 본문(두 번째 --- 이후) 추출
+# Extract the body (everything after the second ---)
 body_after_fm(){ awk 'p{print} /^---[[:space:]]*$/{c++; if(c==2)p=1}' "$1"; }
 first_body_description(){
   awk '
@@ -119,7 +119,7 @@ first_body_description(){
 }
 
 # ---------------------------------------------------------------------------
-# §2. 분류 데이터 (andrew-command-classification.md §1~4 그대로 — .claude 미접촉)
+# §2. classification data (andrew-command-classification.md §1~4 verbatim — .claude untouched)
 # ---------------------------------------------------------------------------
 TEAM_SPAWN="autoplan cso investigate lecture plan-design-review plan-devex-review plan-eng-review review wave0-analysis wave1-discovery wave2-design wave3-story-gate wave4-ip-research wave5-implement wave6-verify-report"
 ARG_SKILLS="route recall guard team-kickoff"
@@ -129,7 +129,7 @@ is_in(){ # $1=needle $2=space-separated haystack
   case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 
-# 별칭 → 정본 매핑(skills 타깃 병합용). 대상 아니면 빈 문자열.
+# Alias -> canonical mapping (for merging in the skills target). Empty string when it does not apply.
 alias_canonical(){
   case "$1" in
     save|context-save) printf 'save-session' ;;
@@ -138,7 +138,7 @@ alias_canonical(){
   esac
 }
 
-# skills 타깃 방출 대상인가(= 팀 스폰형도 별칭도 remote-dev도 아닌 나머지 20)
+# Is this an emission target for skills? (= the other 20: not team-spawning, not an alias, not remote-dev)
 is_skill_target(){
   is_in "$1" "$TEAM_SPAWN" && return 1
   [ -n "$(alias_canonical "$1")" ] && return 1
@@ -147,7 +147,7 @@ is_skill_target(){
 }
 
 # ---------------------------------------------------------------------------
-# §3. TRIGGER/NOT 3부 description 합성 (날조 금지 — 출처 있는 표현만)
+# §3. synthesise the 3-part TRIGGER/NOT description (no fabrication — only sourced wording)
 # ---------------------------------------------------------------------------
 trigger_for(){
   case "$1" in
@@ -181,7 +181,7 @@ not_for(){
   esac
 }
 
-# 인자형 4개 전용 — 산문 인자 규약 블록(CT-SKILL argument_convention, story-07)
+# For the 4 argument-taking skills only — the prose argument-convention block (CT-SKILL argument_convention, story-07)
 arg_prose_for(){
   case "$1" in
     route)
@@ -226,7 +226,7 @@ BLOCK
 }
 
 # ---------------------------------------------------------------------------
-# §4. 경로 배너 + generated 헤더 (모든 skills 방출물 공통, AC#2)
+# §4. path banner + generated header (common to every emitted skill, AC#2)
 # ---------------------------------------------------------------------------
 GENERATED_HEADER_SKILL(){ printf '# generated by scripts/to-codex.sh — 정본: .claude/commands/%s.md (직접 수정 금지)\n' "$1"; }
 GENERATED_HEADER_TOML(){ printf '# generated by scripts/to-codex.sh — 정본: .claude/agents/_base/%s (직접 수정 금지)\n' "$1"; }
@@ -240,7 +240,7 @@ PATH_BANNER(){
 BANNER
 }
 
-# story-16 L1/L2 고지 — save-session/cold-start/taskreport 전용(ux-parity-limits.md §3)
+# story-16 L1/L2 disclosure — only for save-session/cold-start/taskreport (ux-parity-limits.md §3)
 codex_notice_for(){
   case "$1" in
     save-session)
@@ -268,7 +268,7 @@ BLOCK
 }
 
 # ---------------------------------------------------------------------------
-# §5. skills 정본 방출 (.agents/skills/<name>/SKILL.md — D6)
+# §5. emit the canonical skills (.agents/skills/<name>/SKILL.md — D6)
 # ---------------------------------------------------------------------------
 nskill=0
 if [ -d "$CMD_SRC" ]; then
@@ -324,8 +324,8 @@ if [ -d "$CMD_SRC" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# §6. 레거시 스캐폴드(하위호환, AC#6) — <dest>/prompts, <dest>/agents
-#     + ~/.codex/prompts 과도기(--emit-prompts, story-05 AC#1: 팀 스폰형 15개만 제외)
+# §6. legacy scaffold (backwards compat, AC#6) — <dest>/prompts, <dest>/agents
+#     + transitional ~/.codex/prompts (--emit-prompts, story-05 AC#1: only the 15 team-spawning ones excluded)
 # ---------------------------------------------------------------------------
 ncmd=0
 if [ -d "$CMD_SRC" ]; then
@@ -346,7 +346,7 @@ if [ -d "$CMD_SRC" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# §7. 에이전트 → agents/*.toml (레거시 스캐폴드) — literal ''' + spawnable 필터(AC#3)
+# §7. agents -> agents/*.toml (legacy scaffold) — literal ''' + spawnable filter (AC#3)
 # ---------------------------------------------------------------------------
 nagt=0
 nagt_skipped=0
@@ -359,23 +359,23 @@ if [ -d "$AGT_SRC" ]; then
     model="$(fm_val "$f" model)"
     spawnable="$(fm_val "$f" spawnable)"
 
-    # spawnable:false(현재 00-paul-team-lead.md 1건) → TOML 방출 제외(story-05 AC#3 — 18파일 방출
-    # 버그 수정: Paul은 팀원으로 스폰되지 않으므로 서브에이전트 TOML 자체가 성립하지 않는다).
+    # spawnable:false (currently one file, 00-paul-team-lead.md) -> excluded from TOML emission (story-05 AC#3 — fixes
+    # the 18-file emission bug: Paul is never spawned as a teammate, so a subagent TOML makes no sense for him).
     if [ "$spawnable" = "false" ]; then
       nagt_skipped=$((nagt_skipped+1))
       [ "$WRITE" != "1" ] && say "  [agent]  $slug.toml  SKIP(spawnable:false)"
       continue
     fi
 
-    # description = 본문 첫 비어있지 않은 non-heading 줄
+    # description = the body's first non-empty, non-heading line
     desc="$(first_body_description "$f")"
     [ -z "$desc" ] && desc="BATHOS role $slug"
     nagt=$((nagt+1))
 
     if [ "$WRITE" = "1" ]; then
       body="$(body_after_fm "$f")"
-      # AC#3: developer_instructions 본문에 리터럴 ''' 이 등장하면 TOML로 안전 표현이 불가하다
-      # (TOML엔 문자열 연결 연산자가 없어 "분할"이 실질적으로 불가능 — 정직 오류로 중단).
+      # AC#3: if a literal ''' appears in the developer_instructions body, TOML cannot express it safely
+      # (TOML has no string-concatenation operator, so "splitting" is effectively impossible — stop with an honest error).
       if printf '%s' "$body" | grep -qF "'''"; then
         echo "오류: $slug — developer_instructions 본문에 literal ''' 등장, TOML 리터럴 문자열로 안전 표현 불가(AC#3 정직 오류)" >&2
         exit 1
@@ -399,16 +399,16 @@ if [ -d "$AGT_SRC" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# §8. 에이전트 → .codex/agents/*.toml (정본, CT-SUBAGENT — story-11/Stephen 요청)
-#     레거시(§7)와 같은 소스·같은 spawnable 필터·같은 literal ''' 규율이지만, 여기는 배포 정본이라
-#     model 필드에 실값을 채우고 오케스트레이션 표준 문구를 붙인다. 두 절이 거의 같은 루프를 반복하는
-#     이유: §7은 "미리보기 스캐폴드"(레거시 --dest 하위호환, story-05 AC#6)이고 §8은 "story-11 배포
-#     정본"이라 목적이 달라 여기서 억지로 합치면 각 절의 변경 이유가 서로 얽힌다(단일 책임 유지).
+# §8. agents -> .codex/agents/*.toml (canonical, CT-SUBAGENT — story-11/Stephen's request)
+#     Same source, same spawnable filter and same literal ''' discipline as legacy (§7), but this is the release
+#     canon, so the model field gets a real value and the standard orchestration text is appended. Why the two
+#     sections repeat an almost identical loop: §7 is a "preview scaffold" (legacy --dest backwards compat, story-05
+#     AC#6) while §8 is the "story-11 release canon" — different purposes, and force-merging them would entangle each section's reason to change (single responsibility kept).
 # ---------------------------------------------------------------------------
 
-# model 매핑(story-11/SS10 정본 — stephen-model-mapping.md §1, 리드 v0.145.0+ 채택 확정 반영).
-# 이 두 함수만 룩업이고, 나머지 텍스트(주석·오케스트레이션 문구)는 정본 문서에서 그대로 복사한 상수다.
-model_for(){ # $1 = base frontmatter model 값(claude-fable-5|claude-sonnet-5)
+# The model mapping (story-11/SS10 canon — stephen-model-mapping.md §1, reflecting the lead's confirmed v0.145.0+ adoption).
+# Only these two functions are lookups; every other text (comments, orchestration wording) is a constant copied verbatim from the canonical documents.
+model_for(){ # $1 = the base frontmatter model value (claude-fable-5|claude-sonnet-5)
   case "$1" in
     claude-fable-5) printf 'gpt-5.6-sol' ;;
     claude-sonnet-5) printf 'gpt-5.5' ;;
@@ -423,7 +423,7 @@ effort_for(){
   esac
 }
 
-# 잔존 제약 주석 — stephen-model-mapping.md §4 정본 텍스트 그대로(재작문 금지, 날조/과장 리스크 회피).
+# Residual-constraint note — stephen-model-mapping.md §4 canonical text verbatim (no rewriting; avoids fabrication/overclaiming risk).
 MODEL_CONSTRAINT_NOTE(){
   cat <<'BLOCK'
 # ⚠️ 잔존 제약(2026-07-23 확인, [실측]/[문서확정] 아님 — 커뮤니티 재현 수준, 상세: stephen-model-mapping.md#3):
@@ -435,9 +435,9 @@ MODEL_CONSTRAINT_NOTE(){
 BLOCK
 }
 
-# 오케스트레이션 표준 블록 A+B — stephen-orchestration.md 정본 텍스트 그대로(재작문 금지).
-# "TOML/skills 삽입 위치" 절 지정: 개별 role TOML엔 A+B만(C·D는 세션 전역/스폰 의미론이라 페르소나
-# 파일엔 불필요 — AGENTS.md·wave skills 전용).
+# Standard orchestration blocks A+B — stephen-orchestration.md canonical text verbatim (no rewriting).
+# As the "TOML/skills insertion points" section specifies: A+B only in an individual role TOML (C and D carry
+# session-global/spawn semantics, unnecessary in a persona file — they are for AGENTS.md and the wave skills).
 ORCH_BLOCK_AB(){
   cat <<'BLOCK'
 
