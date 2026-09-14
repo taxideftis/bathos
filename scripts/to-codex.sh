@@ -122,7 +122,7 @@ first_body_description(){
 # §2. classification data (andrew-command-classification.md §1~4 verbatim — .claude untouched)
 # ---------------------------------------------------------------------------
 TEAM_SPAWN="autoplan cso investigate lecture plan-design-review plan-devex-review plan-eng-review review wave0-analysis wave1-discovery wave2-design wave3-story-gate wave4-ip-research wave5-implement wave6-verify-report"
-ARG_SKILLS="route recall guard team-kickoff"
+ARG_SKILLS="route recall guard team-kickoff model-switch"
 CODEX_INAPPLICABLE="remote-dev"
 
 is_in(){ # $1=needle $2=space-separated haystack
@@ -177,6 +177,7 @@ not_for(){
     health) printf '특정 버그 조사 요청(→investigate, 팀 스폰형)에는 발동 금지 — 이 스킬은 정적 품질 대시보드만.' ;;
     plan-ceo-review) printf '코드 리뷰(→review)나 설계 리뷰(→plan-design-review, 모두 팀 스폰형) 요청에는 발동 금지 — 이 스킬은 리드 단독 CEO 모드 플랜 리뷰만.' ;;
     retro) printf '진행 중 상태 점검(→team-status)에는 발동 금지 — 이 스킬은 사이클 종료 후 회고 전용.' ;;
+    model-switch) printf '계획(웨이브·역할별 런타임/모델 배정) 변경 의도(→model-config)에는 발동 금지 — 이 스킬은 지금 세션의 백엔드 실황 전환만 담당한다.' ;;
     *) printf '이 스킬과 무관한 일반 코딩/대화 요청에는 발동 금지.' ;;
   esac
 }
@@ -220,6 +221,17 @@ BLOCK
 **컨셉 없이는 진행 금지 — 반드시 되묻는다**(E-SKILL-ARG-AMBIGUOUS 강제 케이스): charter.md 작성에 컨셉이 필수 입력이라 자동 해석·추정으로 채우면 이후 전 웨이브가 틀린 전제 위에서 진행된다.
 
 **결정론 폴백**: `/prompts:team-kickoff <컨셉>`.
+BLOCK
+      ;;
+    model-switch)
+      cat <<'BLOCK'
+**인자 해석**: 멘션($model-switch) 뒤 텍스트를 `<runtime> [model]`(glm|kimi|deepseek|qwen|codex|claude)로 해석한다. 없으면 본문 "1. 무인자"대로 상태+전환 선택지 제시로 진행한다(질문 불필요 — 무인자 흐름이 원본 폴백 그대로).
+
+**모호하면 반드시 사용자에게 되묻는다**(자의 해석 금지 — E-SKILL-ARG-AMBIGUOUS): 전환 대상 런타임을 잘못 해석하면 잘못된 적용(--apply)으로 이어질 수 있다.
+
+**User Sovereignty 최종 방어선**: `--apply`는 반드시 사용자의 명시적 확인 1회 이후에만 실행한다. dry-run 출력을 보여준 뒤 확인을 받기 전에는 아무것도 쓰지 않는다.
+
+**결정론 폴백**: `/prompts:model-switch <runtime> [model]`.
 BLOCK
       ;;
   esac

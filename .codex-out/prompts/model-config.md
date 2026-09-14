@@ -122,3 +122,4 @@ bathos -s $1/.agent-team/_state model validate --wave <W?>   # 미지정 시 전
 - 세션 재시작이 필요한 웨이브가 있으면 **그 목록과 시점**
 
 > 관련 커맨드: `/route`(Lv0~4 라우팅) · `/team-status`(현황) · 각 `/waveN-…`(실제 적용).
+> 지금 이 세션의 백엔드를 당장 바꾸려면 `/model-switch`.
