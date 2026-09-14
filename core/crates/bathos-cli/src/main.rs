@@ -22,6 +22,7 @@
 //! bathos plug disable <id># Disable a module (B4)
 //! bathos audit append     # Append an audit log entry (B-1 fix: single Rust writer)
 //! bathos runtime          # Report claude|codex|unknown CLI host runtime (SS13, CT-ENGINE-5)
+//! bathos key set|list|rm|scan  # API key store (~/.bathos/<rt>.env) + leak scan (story M1)
 //! ```
 //!
 //! ## Exit code convention (hook integration)
@@ -39,6 +40,7 @@ use anyhow::{Context, Result};
 use bathos_gate_engine::{GateEngine, GateIssue, VerdictAggregator};
 use bathos_plug::{ModuleRegistry, PlugManager};
 use bathos_state::{
+    key_store,
     model::{GateType, Project},
     model_plan::{self, ModelPlan, Runtime, SessionBackend},
     model_status::{self, SwitchPlan, SwitchVia},
@@ -188,6 +190,19 @@ enum Commands {
         /// 단일행 compact JSON으로 출력({"schema":"bathos/runtime-detect@1","host":...}).
         #[arg(long)]
         json: bool,
+    },
+    /// API 키 스토어(`~/.bathos/<runtime>.env`) 관리 + 저장소 유출 스캔 (story M1, ADR-D-0010).
+    ///
+    /// **키는 절대 argv로 받지 않는다** — stdin(1행) 또는 `--file`로만 받는다. 명령 문자열은
+    /// audit-log에 그대로 적재되므로 argv 키 = 감사로그 평문 유출이다(L19 실사고의 경로).
+    /// `key scan`은 등록 키의 리터럴 값을 저장소 트리 + `.claude/settings*.json` +
+    /// `_state/audit-log.jsonl`에서 정확 일치 탐색한다(패턴 추측 없음 — L19 실사고 대응).
+    Key {
+        /// 스캔 대상 저장소 루트 (기본값: 현재 디렉터리) — set/list/rm은 무시.
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        #[command(subcommand)]
+        action: KeyAction,
     },
 }
 
@@ -552,6 +567,55 @@ enum FingerprintAction {
     List,
 }
 
+// ── key subcommands (story M1, ADR-D-0010) ───────────────────────────────────
+
+#[derive(Subcommand)]
+enum KeyAction {
+    /// 키를 등록/갱신한다 — `~/.bathos/<runtime>.env` 원자 쓰기(600) + audit `key.set`.
+    ///
+    /// 키 입력은 **stdin 1행**(기본) 또는 `--file <경로>`만 허용된다. `--key <값>` 류 인자는
+    /// 의도적으로 제공하지 않는다: 명령 문자열은 audit-log.jsonl에 그대로 적재되므로 argv
+    /// 키는 감사로그 평문 유출이다(L19). 위치 인자로 키를 넘기면 값 에코 없이
+    /// `E-KEY-ARGV`(exit 2)로 거부한다.
+    Set {
+        /// 키 등록 대상 런타임 (glm|kimi|deepseek|qwen — claude/codex는 거부)
+        runtime: String,
+        /// (reject 전용 슬롯) 이 위치에 온 값은 절대 소비되지 않고 `E-KEY-ARGV`로 거부된다.
+        /// 오류 메시지에도 값이 에코되지 않는다(E9 — 에러에 키가 비치면 그 자체가 유출).
+        #[arg(hide = true)]
+        rejected_argv_key: Vec<String>,
+        /// 키가 담긴 파일(1행). 미지정 시 stdin에서 1행을 읽는다.
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// 등록 상태 표 — runtime별 등록여부·지문(sha256 앞 8)·mtime·권한.
+    ///
+    /// **키 값은 표시되지 않는다**(지문만). 권한≠600 파일은 `W-KEY-PERM` + chmod 안내
+    /// (경고 — 차단 아님, E1).
+    List {
+        /// 사람용 메시지를 stdout에 내보는 대신 stdout에 단일 JSON만 출력한다.
+        #[arg(long)]
+        json: bool,
+    },
+    /// 등록 키 파일을 삭제하고 audit `key.rm`을 남긴다. 부재 시 "등재 없음"(exit 0, 무변화).
+    Rm {
+        /// 삭제 대상 런타임 (glm|kimi|deepseek|qwen)
+        runtime: String,
+    },
+    /// 유출 검사 — 등록 키의 **리터럴 값 정확 일치**를 저장소 트리 + `.claude/settings*.json`
+    /// + `_state/audit-log.jsonl`에서 탐색한다(패턴 추측 없음 — AC7).
+    ///
+    /// 발견 시 `W-KEY-LEAK` + `파일:행`(값은 마스킹, 지문만 표시) + 로테이션 절차 안내,
+    /// **exit 2**. 깨끗=exit 0, I/O 오류=exit 1. 보조로 `Z_AI_API_KEY=`/`ANTHROPIC_AUTH_TOKEN=`/
+    /// `ANTHROPIC_API_KEY=` 대입 문자열도 `W-KEY-ASSIGN` warn(비차단). 근거는 가정이 아니라
+    /// 실사고다(L19 — settings.local.json allowlist에 키 평문 잔존).
+    Scan {
+        /// stdout에 단일 JSON만 출력한다.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Execution entry point
 // ─────────────────────────────────────────────────────────────────────────────
@@ -590,6 +654,7 @@ fn run(cli: Cli) -> Result<i32> {
             interval,
         } => Ok(handle_panes(mode, path, wave, interval)),
         Commands::Runtime { json } => Ok(handle_runtime(json)),
+        Commands::Key { root, action } => handle_key(action, &cli.state_dir, &root),
     }
 }
 
@@ -1663,22 +1728,6 @@ fn unix_file_mode(_m: &std::fs::Metadata) -> Option<u32> {
     None
 }
 
-/// The store-side variable name `~/.bathos/<rt>.env` exports per runtime (w7 design §2.2).
-/// glm keeps its historical `Z_AI_API_KEY` (scripts/glm-env.sh consumes it); the other
-/// three use BATHOS-prefixed names. M1's `key_store.rs` will own this mapping — kept here
-/// (its only consumer is [`switch_paste_commands`]) until that module exists.
-fn key_store_var(rt: Runtime) -> &'static str {
-    match rt {
-        Runtime::Glm => "Z_AI_API_KEY",
-        Runtime::Kimi => "BATHOS_KIMI_KEY",
-        Runtime::Deepseek => "BATHOS_DEEPSEEK_KEY",
-        Runtime::Qwen => "BATHOS_QWEN_KEY",
-        // Unreachable through run_switch (claude = return path, codex rejected upstream) —
-        // arm kept total so adding a Runtime variant stays a one-line change.
-        Runtime::Claude | Runtime::Codex => "(해당 없음)",
-    }
-}
-
 /// `[E-KEY-ABSENT]` (AC2) — factored out so the exact wording is unit-assertable without
 /// capturing stderr. Reuses the established `[E-*]` message style (code first, guidance
 /// after); explicitly states the content-never-read property so users trust the probe.
@@ -1719,19 +1768,19 @@ fn switch_paste_commands(target: Runtime, model_pin: Option<&str>) -> Vec<String
                 "source ~/.bathos/{name}.env && export ANTHROPIC_BASE_URL=\"{ep}\" {auth}=\"${store}\"",
                 ep = model_plan::env_endpoint_hint(target),
                 auth = model_plan::env_auth_var(target),
-                store = key_store_var(target),
+                store = key_store::store_var(target),
             ));
         }
         Runtime::Qwen => {
             lines.push(
                 "# Qwen (전용 스크립트 부재 [실측] — raw export, 단 엔드포인트 미확정)".to_string(),
             );
-            lines.push(
+            lines.push(format!(
                 "source ~/.bathos/qwen.env && export ANTHROPIC_BASE_URL=\"<엔드포인트 미확정 — 아래 \
                  경고의 두 형태 중 Model Studio 콘솔에서 확인한 것으로 대입>\" \
-                 ANTHROPIC_AUTH_TOKEN=\"$BATHOS_QWEN_KEY\""
-                    .to_string(),
-            );
+                 ANTHROPIC_AUTH_TOKEN=\"${var}\"",
+                var = key_store::store_var(Runtime::Qwen),
+            ));
             // The qwen hint is a warning, not a URL — emit it verbatim as comment lines so
             // the whole block stays safe to paste as-is.
             for l in model_plan::env_endpoint_hint(Runtime::Qwen).lines() {
@@ -2397,7 +2446,432 @@ fn run_status(
     Ok(0)
 }
 
-/// Resolves the role slugs `bathos model show` should display: the wave's registered roster
+// ─────────────────────────────────────────────────────────────────────────────
+// Key store handler (story M1, w7-model-switch-limit-design §2, ADR-D-0010)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The four invariants (single out-of-repo location / no argv keys / no key material in any
+// output / audit target = runtime name only) are pinned in `bathos_state::key_store`; this
+// layer only wires CLI input, exit codes, and output formatting onto them. The integration
+// suite (`tests/key_cli.rs`) proves the no-leak property end-to-end by grepping child
+// stdout+stderr, the audit log, and the scanned tree for a fixture key.
+
+/// `bathos key <sub>` dispatch. `~/.bathos` is resolved from HOME once here (`None` =
+/// HOME unresolvable → I/O-class failure, exit 1) so every subcommand is testable against
+/// a tempdir HOME (same pattern as `run_status`/`run_switch`).
+fn handle_key(action: KeyAction, state_dir: &Path, root: &Path) -> Result<i32> {
+    let bathos_dir = home_bathos_dir();
+    match action {
+        KeyAction::Set {
+            runtime,
+            rejected_argv_key,
+            file,
+        } => run_key_set(
+            state_dir,
+            &runtime,
+            &rejected_argv_key,
+            file,
+            bathos_dir.as_deref(),
+        ),
+        KeyAction::List { json } => run_key_list(json, bathos_dir.as_deref()),
+        KeyAction::Rm { runtime } => run_key_rm(state_dir, &runtime, bathos_dir.as_deref()),
+        KeyAction::Scan { json } => run_key_scan(json, root, bathos_dir.as_deref()),
+    }
+}
+
+fn err_home_unresolvable() -> anyhow::Error {
+    anyhow::anyhow!("HOME을 해석할 수 없어 키 스토어(~/.bathos) 위치를 정할 수 없습니다")
+}
+
+/// Message text for `E-KEY-ARGV` (AC2) — deliberately never interpolates any argv content:
+/// the "runtime" slot is where users paste keys by mistake, and echoing it would make this
+/// error message the leak channel it exists to close (E9).
+fn err_key_argv() -> String {
+    "[E-KEY-ARGV] 키를 명령줄 인자로 전달할 수 없습니다 — 명령 문자열은 audit-log.jsonl에 그대로 \
+     적재됩니다(L19 유출 경로). stdin 1행 또는 --file <경로> 를 사용하세요. 예: printf '%s' '<키>' \
+     | bathos key set <runtime>"
+        .to_string()
+}
+
+/// The input half of `key set`: reject argv keys, validate the runtime, read the material
+/// (stdin 1 line, or `--file`), then delegate the mutation to [`apply_key_set`].
+///
+/// Validation order matters for both safety and testability: argv rejection first (most
+/// dangerous mistake), runtime second (AC4 — `claude`/`codex` never reach a stdin read, so
+/// the test can run them with a closed stdin), material last.
+fn run_key_set(
+    state_dir: &Path,
+    runtime_str: &str,
+    rejected_argv_key: &[String],
+    file: Option<PathBuf>,
+    bathos_dir: Option<&Path>,
+) -> Result<i32> {
+    if !rejected_argv_key.is_empty() {
+        eprintln!("{}", err_key_argv());
+        return Ok(2);
+    }
+    let rt = match key_store::parse_key_runtime(runtime_str) {
+        Ok(rt) => rt,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return Ok(2);
+        }
+    };
+    let material = match &file {
+        Some(p) => std::fs::read_to_string(p)
+            .with_context(|| format!("키 파일 읽기 실패: {}", p.display()))?,
+        None => {
+            use std::io::BufRead;
+            let mut buf = String::new();
+            std::io::stdin()
+                .lock()
+                .read_line(&mut buf)
+                .context("stdin 읽기 실패")?;
+            buf
+        }
+    };
+    // Trailing newline is transport, not key material; whitespace-only input is empty (AC3).
+    let material = material.trim();
+    if material.is_empty() {
+        // Same code for an empty --file: the contract is "input was empty" (E-KEY-STDIN-EMPTY
+        // is the code the design registered for this class; the channel is in the message).
+        eprintln!(
+            "[E-KEY-STDIN-EMPTY] 키 입력이 비어 있습니다 — 1행 텍스트로 전달하세요. 예: \
+             printf '%s' '<키>' | bathos key set <runtime>   (또는 --file <경로>)"
+        );
+        return Ok(2);
+    }
+    apply_key_set(bathos_dir, state_dir, rt, material)
+}
+
+/// The mutating half of `key set` — write → audit → report, in design §2.3's order.
+fn apply_key_set(
+    bathos_dir: Option<&Path>,
+    state_dir: &Path,
+    rt: Runtime,
+    material: &str,
+) -> Result<i32> {
+    let dir = bathos_dir.ok_or_else(err_home_unresolvable)?;
+    key_store::write_key(dir, rt, material)
+        .with_context(|| format!("~/.bathos/{name}.env 쓰기 실패", name = rt.as_str()))?;
+    // Invariant 4: the audit target is the runtime name only — `material` never enters
+    // this call (single Rust writer path, B-1 rule).
+    audit_key_action(state_dir, "key.set", rt.as_str());
+    println!(
+        "[bathos key set] ✓ {name}.env 저장 — 지문 sha256:{fp} (파일 600 · 디렉터리 700 · 원자 쓰기)",
+        name = rt.as_str(),
+        fp = key_store::fingerprint(material),
+    );
+    println!(
+        "  소비: source ~/.bathos/{name}.env{glm_hint}",
+        name = rt.as_str(),
+        glm_hint = if rt == Runtime::Glm {
+            " && source scripts/glm-env.sh"
+        } else {
+            ""
+        },
+    );
+    Ok(0)
+}
+
+/// Appends `key.set`/`key.rm` through the single Rust audit writer (B-1 rule: in-process
+/// call into the same `append_audit_entry` the `bathos audit append` CLI wraps — never a
+/// bash printf into the jsonl). Fail-safe: an audit failure is warned but never fails the
+/// key operation — the write already succeeded, and a misleading non-zero exit would invite
+/// retrying with the key back on the command line.
+fn audit_key_action(state_dir: &Path, action: &str, target: &str) {
+    if !state_dir.exists() {
+        let _ = std::fs::create_dir_all(state_dir);
+    }
+    let project_id = read_project_id_from_state(state_dir);
+    if let Err(e) = bathos_state::audit::append_audit_entry(
+        &state_dir.join("audit-log.jsonl"),
+        &project_id,
+        "User",
+        action,
+        target,
+    ) {
+        eprintln!("[bathos key] ⚠ audit 기록 실패(fail-safe — 키 연산은 성공): {e}");
+    }
+}
+
+/// RFC3339 UTC seconds — deterministic mtime rendering for the table and JSON output.
+fn mtime_rfc3339(t: std::time::SystemTime) -> String {
+    let dt: chrono::DateTime<chrono::Utc> = t.into();
+    dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+fn run_key_list(json: bool, bathos_dir: Option<&Path>) -> Result<i32> {
+    let dir = bathos_dir.ok_or_else(err_home_unresolvable)?;
+    let infos: Vec<(Runtime, key_store::KeyFileInfo)> = key_store::KEY_RUNTIMES
+        .iter()
+        .map(|rt| {
+            (
+                *rt,
+                key_store::probe_key_file(&key_store::key_file_path(dir, *rt)),
+            )
+        })
+        .collect();
+
+    // Non-blocking warnings (E1): wrong perms and unparseable content are surfaced on
+    // stderr; the table still prints (부분 성공 우선 — 전체를 죽이지 않는다).
+    for (rt, info) in &infos {
+        if !info.present {
+            continue;
+        }
+        if !info.perm_ok {
+            eprintln!(
+                "[W-KEY-PERM] {name}.env 권한이 {perm}입니다 — chmod 600 ~/.bathos/{name}.env 를 권장합니다 (차단은 아님)",
+                name = rt.as_str(),
+                perm = info
+                    .perm
+                    .map(|p| format!("{p:o}"))
+                    .unwrap_or_else(|| "미확인".into()),
+            );
+        }
+        if info.fingerprint.is_none() {
+            eprintln!(
+                "[W-KEY-FORMAT] {name}.env에서 export 행을 파싱하지 못했습니다 — 지문과 스캔 대상에서 \
+                 제외됩니다. 파일 내용을 확인하세요 (한 줄: export VAR='값')",
+                name = rt.as_str(),
+            );
+        }
+    }
+
+    if json {
+        let keys: Vec<serde_json::Value> = infos
+            .iter()
+            .map(|(rt, info)| {
+                serde_json::json!({
+                    "runtime": rt.as_str(),
+                    "registered": info.present,
+                    "fingerprint": info.fingerprint,
+                    "mtime": info.mtime.map(mtime_rfc3339),
+                    "perm": info.perm.map(|p| format!("{p:o}")),
+                    "perm_ok": info.perm_ok,
+                    "var": info.var,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::json!({ "schema": "bathos/key-list@1", "keys": keys })
+        );
+        return Ok(0);
+    }
+
+    println!("[bathos key list] ~/.bathos 키 스토어 (값은 표시하지 않습니다 — 지문만)");
+    println!(
+        "{:<10} {:<6} {:<12} {:<21} perm",
+        "runtime", "reg", "fingerprint", "mtime(UTC)"
+    );
+    for (rt, info) in &infos {
+        println!(
+            "{:<10} {:<6} {:<12} {:<21} {}",
+            rt.as_str(),
+            if info.present { "●" } else { "○" },
+            info.fingerprint.as_deref().unwrap_or("-"),
+            info.mtime.map(mtime_rfc3339).unwrap_or_else(|| "-".into()),
+            info.perm
+                .map(|p| format!("{p:o}"))
+                .unwrap_or_else(|| "-".into()),
+        );
+    }
+    if !infos.iter().any(|(_, i)| i.present) {
+        println!(
+            "  등록된 키가 없습니다 — 다음 행동: printf '%s' '<키>' | bathos key set <runtime>"
+        );
+    }
+    Ok(0)
+}
+
+fn run_key_rm(state_dir: &Path, runtime_str: &str, bathos_dir: Option<&Path>) -> Result<i32> {
+    let rt = match key_store::parse_key_runtime(runtime_str) {
+        Ok(rt) => rt,
+        Err(msg) => {
+            eprintln!("{msg}");
+            return Ok(2);
+        }
+    };
+    let dir = bathos_dir.ok_or_else(err_home_unresolvable)?;
+    let path = key_store::key_file_path(dir, rt);
+    if !path.exists() {
+        // AC6: absent = "등재 없음(변화 없음)", still exit 0 — rm is idempotent.
+        println!(
+            "[bathos key rm] ○ {name}.env 등재 없음 — 변화 없음",
+            name = rt.as_str()
+        );
+        return Ok(0);
+    }
+    std::fs::remove_file(&path).with_context(|| format!("{} 삭제 실패", path.display()))?;
+    audit_key_action(state_dir, "key.rm", rt.as_str());
+    println!(
+        "[bathos key rm] ✓ {name}.env 삭제 — 감사 기록 key.rm",
+        name = rt.as_str()
+    );
+    Ok(0)
+}
+
+/// `bathos key scan` (AC7) — collect → read → exact-literal match → report.
+///
+/// Exit precedence: leaks (2) beat I/O problems (1), which beat clean (0) — the user needs
+/// the leak report even when some files were unreadable, but a report is only believable
+/// because unreadable files are counted and shown, never silently dropped.
+fn run_key_scan(json: bool, root: &Path, bathos_dir: Option<&Path>) -> Result<i32> {
+    // Gather registered literals from the store. An unreadable store file is an I/O-class
+    // problem (the key it holds would go unsearched — a silent false "clean" is the worst
+    // outcome); an unparseable/empty one simply contributes nothing to search for.
+    let mut registered: Vec<key_store::RegisteredKey> = Vec::new();
+    let mut io_problems = 0usize;
+    let dir = match bathos_dir {
+        Some(d) => d,
+        None => {
+            eprintln!("[bathos key scan] ! HOME을 해석할 수 없어 키 스토어를 읽을 수 없습니다");
+            return Ok(1);
+        }
+    };
+    for rt in &key_store::KEY_RUNTIMES {
+        match key_store::read_key_file(&key_store::key_file_path(dir, *rt)) {
+            Ok(Some((_, value))) if !value.is_empty() => {
+                registered.push(key_store::RegisteredKey {
+                    runtime: rt.as_str().to_string(),
+                    fingerprint: key_store::fingerprint(&value),
+                    value,
+                })
+            }
+            Ok(_) => {}
+            // Absent file = not registered — the normal steady state, not an I/O problem.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => {
+                io_problems += 1;
+                eprintln!(
+                    "[bathos key scan] ! {name}.env 읽기 실패 — 이 키는 탐색 대상에서 제외됩니다",
+                    name = rt.as_str()
+                );
+            }
+        }
+    }
+    if registered.is_empty() {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema": "bathos/key-scan@1",
+                    "registered_keys": 0,
+                    "scanned": 0,
+                    "leaks": [],
+                    "assignment_warnings": [],
+                })
+            );
+        } else {
+            println!(
+                "[bathos key scan] ○ 등록된 키가 없어 탐색할 값이 없습니다 — 다음 행동: \
+                 printf '%s' '<키>' | bathos key set <runtime> 등록 후 재실행"
+            );
+        }
+        return Ok(0);
+    }
+
+    let collection = match key_store::collect_scan_files(root) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[bathos key scan] ! 스캔 대상 수집 실패: {e}");
+            return Ok(1);
+        }
+    };
+
+    // (display, line_no, key_index) — findings keep file:line plus the fingerprint only;
+    // the matched value itself never reaches the report (invariant 3).
+    let mut leaks: Vec<(String, usize, usize)> = Vec::new();
+    let mut assigns: Vec<(String, usize)> = Vec::new();
+    let mut read_errors = 0usize;
+    for f in &collection.files {
+        let bytes = match std::fs::read(&f.path) {
+            Ok(b) => b,
+            Err(_) => {
+                read_errors += 1;
+                continue;
+            }
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        for hit in key_store::scan_text(&text, &registered) {
+            leaks.push((f.display.clone(), hit.line_no, hit.key_index));
+        }
+        for line_no in key_store::scan_assignment_lines(&text) {
+            assigns.push((f.display.clone(), line_no));
+        }
+    }
+    io_problems += read_errors;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "bathos/key-scan@1",
+                "root": root.display().to_string(),
+                "used_git": collection.used_git,
+                "registered_keys": registered.len(),
+                "scanned": collection.files.len(),
+                "dataless_skipped": collection.dataless_skipped,
+                "oversized_skipped": collection.oversized_skipped,
+                "read_errors": read_errors,
+                "leaks": leaks.iter().map(|(d, l, ki)| serde_json::json!({
+                    "code": "W-KEY-LEAK",
+                    "runtime": registered[*ki].runtime,
+                    "fingerprint": registered[*ki].fingerprint,
+                    "file": d,
+                    "line": l,
+                })).collect::<Vec<_>>(),
+                "assignment_warnings": assigns.iter().map(|(d, l)| serde_json::json!({
+                    "code": "W-KEY-ASSIGN",
+                    "file": d,
+                    "line": l,
+                })).collect::<Vec<_>>(),
+            })
+        );
+    } else {
+        println!(
+            "[bathos key scan] root={root} — 대상 {scanned}파일 (git 열거={git} · dataless 스킵 {dl} · \
+             크기 스킵 {os} · 읽기 오류 {re}) · 등록 키 {nkeys}개",
+            root = root.display(),
+            scanned = collection.files.len(),
+            git = if collection.used_git { "git" } else { "폴백" },
+            dl = collection.dataless_skipped,
+            os = collection.oversized_skipped,
+            re = read_errors,
+            nkeys = registered.len(),
+        );
+        for (display, line_no, ki) in &leaks {
+            println!(
+                "! W-KEY-LEAK {display}:{line_no} — {rt} 키(sha256:{fp}) 평문 일치",
+                rt = registered[*ki].runtime,
+                fp = registered[*ki].fingerprint,
+            );
+        }
+        if !leaks.is_empty() {
+            println!(
+                "  조치: ① 프로바이더 콘솔에서 키 로테이션 → ② 위 파일·행의 키 문자열 수동 제거 → \
+                 ③ bathos key scan 재실행"
+            );
+        }
+        for (display, line_no) in &assigns {
+            println!(
+                "! W-KEY-ASSIGN {display}:{line_no} — 인증변수 대입 문자열 발견(보조 경고 — 값 확인 요망)"
+            );
+        }
+        if leaks.is_empty() && io_problems == 0 {
+            println!("✓ 유출 없음 — 등록 키의 리터럴이 스캔 대상에 없습니다");
+        }
+    }
+
+    Ok(if !leaks.is_empty() {
+        2
+    } else if io_problems > 0 {
+        1
+    } else {
+        0
+    })
+}
 /// (`--wave`) if given, otherwise the union of every slug already in the plan and every slug
 /// discoverable under `agents_dir` (so `show` is useful even before any `set` has ever run —
 /// it should show the full "would-resolve-to-frontmatter" universe, not an empty table).
