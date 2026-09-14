@@ -1947,6 +1947,11 @@ fn clear_settings_env(path: &Path) -> Result<Vec<String>, SettingsError> {
     Ok(shadowed)
 }
 
+/// AC5 (story M4): the honest Tier-R limitation, printed on EVERY Tier-R output —
+/// dry-run and apply alike — so the restart path is never missed (single source:
+/// the two outputs must not drift apart).
+const TIER_R_LIMIT_NOTICE: &str = "  한계 고지: 이 명령은 현재 세션을 바꾸지 못합니다 — 아래 명령을 새 터미널에서 실행하세요 (ADR-D-0005: 세션 재기동은 사람의 행동).";
+
 /// `bathos model switch` — see [`SwitchInvocation`]. `bathos_dir` (key-store root) and
 /// `measured` (the live backend) are parameters, not env reads, so tests point them at
 /// fixtures instead of polluting the real environment.
@@ -2138,6 +2143,9 @@ fn run_switch(
                 ));
             }
         }
+        // AC5 (story M4): every Tier-R output ends with the limitation notice —
+        // dry-run included (lead fix, s16 AC5 partial gap).
+        out.push(TIER_R_LIMIT_NOTICE.to_string());
         for w in &warnings {
             out.push(format!("  ⚠ {w}"));
         }
@@ -2273,12 +2281,8 @@ fn run_switch(
             "[bathos model switch] {} 전환 — 상태 기록·감사 완료",
             target.as_str()
         ));
-        // AC5: the honest Tier-R limitation, always.
-        out.push(
-            "  한계 고지: 이 명령은 현재 세션을 바꾸지 못합니다 — 아래 명령을 새 터미널에서 실행하세요 \
-             (ADR-D-0005: 세션 재기동은 사람의 행동)."
-                .to_string(),
-        );
+        // AC5: the honest Tier-R limitation, always (single source with dry-run).
+        out.push(TIER_R_LIMIT_NOTICE.to_string());
     }
     for w in &warnings {
         out.push(format!("  ⚠ {w}"));
