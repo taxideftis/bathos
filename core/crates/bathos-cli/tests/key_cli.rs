@@ -318,7 +318,12 @@ fn ac5_list_reports_registration_fingerprint_perm() {
     assert_eq!(code(&out), 0);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(stdout.contains(KIMI_FP), "{stdout}");
+    // POSIX mode bits do not exist on Windows (M4 precedent: unix_file_mode -> None),
+    // so the perm cell renders "-" there; only Unix can assert 0600.
+    #[cfg(unix)]
     assert!(stdout.contains("600"), "{stdout}");
+    #[cfg(not(unix))]
+    assert!(stdout.contains(" -\n"), "{stdout}");
     assert!(
         stdout.contains("○"),
         "unregistered marker missing: {stdout}"

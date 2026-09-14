@@ -453,10 +453,13 @@ pub fn collect_scan_files(root: &Path) -> std::io::Result<ScanCollection> {
     for path in paths {
         match classify_for_scan(&path) {
             Scannable::Yes => {
+                // Reports print git-style `file:line` and are consumed by logs, CI and
+                // tests on every OS — normalize Windows separators to `/`.
                 let display = path
                     .strip_prefix(root)
                     .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+                    .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+                    .replace('\\', "/");
                 collection.files.push(CollectedFile { path, display });
             }
             Scannable::Dataless => collection.dataless_skipped += 1,
