@@ -76,6 +76,24 @@ pub struct SwitchPlan {
     pub verified: bool,
 }
 
+/// Summary of the newest limit event, embedded in `model-status.json` (story
+/// M3, AC5). Verbatim strings, not enums — the summary mirrors the ledger row
+/// (`bathos/limit-event@1`) as written, and rows from other/older writers must
+/// surface as-is. All fields default so an M4-era file without this block loads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastLimitEvent {
+    #[serde(default)]
+    pub ts: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub error_type: Option<String>,
+    #[serde(default)]
+    pub classified: Option<String>,
+    #[serde(default)]
+    pub limit_kind_guess: Option<String>,
+}
+
 /// Tier-S residue marker (w7 design §3.2): non-null while a temporary key copy sits in
 /// `.claude/settings.local.json`. Set by M5's injection; cleared to `None` by the M4
 /// return path after the env keys are blanked. A lingering non-null value after a return
@@ -104,6 +122,19 @@ pub struct ModelStatus {
     pub last_switch_plan: Option<SwitchPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transient_injection: Option<TransientInjection>,
+    /// Newest limit-event summary (M3 AC5) — absent (not null) while no event
+    /// has ever been recorded, mirroring the `last_switch_plan` precedent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_limit_event: Option<LastLimitEvent>,
+    /// Banner latch (M3 AC5/E5): raised by banner-worthy limit events, lowered
+    /// exactly once by `model status --banner`. A bool — serialized always, so
+    /// the §3.2 document shape (`"banner_pending":true`) is literal.
+    #[serde(default)]
+    pub banner_pending: bool,
+    /// When the pending banner was last shown. Always serialized (§3.2 shows
+    /// `"banner_shown_at":null` literally in the fresh-state document).
+    #[serde(default)]
+    pub banner_shown_at: Option<DateTime<Utc>>,
 }
 
 fn utc_now() -> DateTime<Utc> {
@@ -126,6 +157,9 @@ impl Default for ModelStatus {
             session_backend: default_backend(),
             last_switch_plan: None,
             transient_injection: None,
+            last_limit_event: None,
+            banner_pending: false,
+            banner_shown_at: None,
         }
     }
 }
@@ -198,13 +232,16 @@ pub fn load(state_dir: &Path) -> (ModelStatus, Vec<PlanWarning>) {
 }
 
 /// Atomically writes `status` to `<state_dir>/model-status.json` (temp file + rename —
-/// `model_plan::save` pattern: a partial write is never observable). No file lock, same
-/// rationale as `model_plan::save`: the writers are sequential user-invoked CLI calls
-/// (`model switch` / `model status`), not concurrent hooks.
+/// `model_plan::save` pattern: a partial write is never observable). No file lock — but
+/// unlike `model_plan::save` the temp name is PID-unique: since M3 the writers include
+/// concurrent `limit-record` hook processes (E10), and a shared `.model-status.tmp` would
+/// let one process rename another's half-written temp. With a per-PID temp, every rename
+/// lands a fully-written file even under overlap (worst case: one snapshot update is
+/// lost, never torn).
 pub fn save(state_dir: &Path, status: &ModelStatus) -> std::io::Result<()> {
     fs::create_dir_all(state_dir)?;
     let path = status_path(state_dir);
-    let tmp = state_dir.join(".model-status.tmp");
+    let tmp = state_dir.join(format!(".model-status.{}.tmp", std::process::id()));
     let json = serde_json::to_string_pretty(status)?;
     fs::write(&tmp, json.as_bytes())?;
     fs::rename(&tmp, &path)?;
@@ -308,6 +345,45 @@ mod tests {
         assert_eq!(status.transient_injection, None);
     }
 
+    // ── M3 limit/banner fields: both compatibility directions ────────────────
+
+    #[test]
+    fn m3_limit_fields_roundtrip_and_m4_files_still_load() {
+        // New writer → new reader: the three M3 fields survive a save/load cycle.
+        let dir = TempDir::new().unwrap();
+        let mut status = ModelStatus {
+            banner_pending: true,
+            banner_shown_at: Some(ts(2026, 9, 14)),
+            ..ModelStatus::default()
+        };
+        status.last_limit_event = Some(LastLimitEvent {
+            ts: Some(ts(2026, 9, 14)),
+            source: "StopFailure".into(),
+            error_type: Some("rate_limit".into()),
+            classified: Some("limit-suspect".into()),
+            limit_kind_guess: Some("session".into()),
+        });
+        save(dir.path(), &status).unwrap();
+        let (loaded, warnings) = load(dir.path());
+        assert!(warnings.is_empty());
+        assert_eq!(loaded.last_limit_event, status.last_limit_event);
+        assert!(loaded.banner_pending);
+        assert_eq!(loaded.banner_shown_at, Some(ts(2026, 9, 14)));
+
+        // Old (M4-era) writer → new reader: no limit/banner keys at all → defaults.
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("model-status.json"),
+            r#"{"schema":"bathos/model-status@1","updated":"2026-09-12T00:00:00Z","session_backend":"claude"}"#,
+        )
+        .unwrap();
+        let (loaded, warnings) = load(dir.path());
+        assert!(warnings.is_empty());
+        assert_eq!(loaded.last_limit_event, None);
+        assert!(!loaded.banner_pending);
+        assert_eq!(loaded.banner_shown_at, None);
+    }
+
     /// Two `ModelStatus::default()` values never compare equal (`updated` is
     /// `Utc::now()` per call), so fallback assertions compare every field *except*
     /// the timestamp — the semantic content of "empty state".
@@ -349,7 +425,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         save(dir.path(), &ModelStatus::default()).unwrap();
         assert!(dir.path().join("model-status.json").exists());
-        assert!(!dir.path().join(".model-status.tmp").exists());
+        let tmp_leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".model-status") && n.ends_with(".tmp"))
+            .collect();
+        assert!(tmp_leftovers.is_empty(), "{tmp_leftovers:?}");
     }
 
     // ── verification comparison (AC9: match / mismatch) ──────────────────────

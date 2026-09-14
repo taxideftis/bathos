@@ -40,7 +40,7 @@ use anyhow::{Context, Result};
 use bathos_gate_engine::{GateEngine, GateIssue, VerdictAggregator};
 use bathos_plug::{ModuleRegistry, PlugManager};
 use bathos_state::{
-    key_store,
+    key_store, limit_events,
     model::{GateType, Project},
     model_plan::{self, ModelPlan, Runtime, SessionBackend},
     model_status::{self, SwitchPlan, SwitchVia},
@@ -468,11 +468,28 @@ enum ModelAction {
     ///
     /// 판정은 **env 기준**이며 실제 접속 백엔드 확증은 아니다[V-12]. 일치 시
     /// `verified=true`를 기록하고 `bathos model detect`(plan SSOT 동기화)를 안내한다.
-    /// 키 파일은 존재·권한만 표시(내용은 읽지 않음).
+    /// 키 파일·자격증명은 존재·권한·지문(sha256 앞 8)만 표시 — 값은 절대 출력하지 않는다.
+    /// M3 확장: 자격증명 경로 진단(AC8) + 최근 한도 이벤트 + `--banner` 배너 정본 렌더.
     Status {
         /// 사람용 메시지를 stderr로 빼고 stdout에 단일 JSON만 출력한다.
         #[arg(long)]
         json: bool,
+        /// 배너 정본을 렌더한다(설계 §11 — M6 훅이 호출하는 유일 경로). pending 배너를
+        /// 1회 노출한 뒤 banner_pending=false·banner_shown_at 기록. 항상 exit 0.
+        #[arg(long)]
+        banner: bool,
+    },
+    /// 훅 전용: stdin payload 1건을 `_state/limit-events.jsonl`에 적재하고
+    /// `_state/model-status.json`을 갱신한다 (story M3, AC1/AC2).
+    ///
+    /// **fail-safe — 기록 성공·실패 모두 exit 0**(오류는 stderr만, 설계 §6 exit 표:
+    /// 텔레메트리 실패가 세션을 막아서는 안 된다). audit HMAC 체인에는 참여하지 않는다
+    /// (AC9 — 관측 데이터와 행위 기록의 무결성 모델 분리).
+    LimitRecord {
+        /// 이벤트 소스: auto(payload에서 추정, 훅 기본) | manual | StopFailure |
+        /// Notification | PreModelSwitch | PostModelSwitch.
+        #[arg(long, default_value = "auto")]
+        source: String,
     },
 }
 
@@ -1642,11 +1659,19 @@ fn handle_model(action: ModelAction, state_dir: &Path, root: &Path) -> Result<i3
             ),
         ),
 
-        // ── bathos model status (story M4, AC9) ──────────────────────────────
-        ModelAction::Status { json } => run_status(
+        // ── bathos model status (story M4 AC9 + M3 AC7/AC8 확장) ─────────────
+        ModelAction::Status { json, banner } => run_status(
             json,
+            banner,
             state_dir,
             home_bathos_dir().as_deref(),
+            std::env::var("ANTHROPIC_BASE_URL").ok().as_deref(),
+            root,
+        ),
+        // ── bathos model limit-record (story M3, AC1) ────────────────────────
+        ModelAction::LimitRecord { source } => run_limit_record(
+            &source,
+            state_dir,
             std::env::var("ANTHROPIC_BASE_URL").ok().as_deref(),
         ),
     }
@@ -2302,21 +2327,37 @@ fn switch_json_view(
 }
 
 /// `bathos model status` — the verification half of "a switch is not done until verified"
-/// (AC9). Re-detects the live env backend and compares it with the recorded switch plan.
-/// Writes only when a plan exists (to persist `verified`); otherwise a pure read-only
+/// (M4 AC9), extended in M3 with the limit-event section, credential-path diagnostics
+/// (AC8), and the banner renderer (AC7 `--banner`). Re-detects the live env backend and
+/// compares it with the recorded switch plan. Writes only when a plan exists (to persist
+/// `verified`) or when `--banner` consumes the pending latch; otherwise a pure read-only
 /// report. Everything here is **env-based** — the output must keep saying so (real
-/// connection confirmation is V-12, out of this command's reach). `bathos_dir` and
-/// `base_url` are parameters so tests inject fixtures/values without touching real env.
+/// connection confirmation is V-12, out of this command's reach). `bathos_dir`, `base_url`
+/// and `root` are parameters so tests inject fixtures/values without touching real env.
 fn run_status(
     json: bool,
+    banner: bool,
     state_dir: &Path,
     bathos_dir: Option<&Path>,
     base_url: Option<&str>,
+    root: &Path,
 ) -> Result<i32> {
     let measured = SessionBackend::detect_from_base_url(base_url);
     let (mut status, warnings) = model_status::load(state_dir);
     for w in &warnings {
         eprintln!("[bathos model status] {} — {}", w.code, w.message);
+    }
+
+    // M3 AC6: newest ledger rows via tail read — the whole file is never scanned
+    // (NFR p95 <200ms @1MB), and corrupt rows warn once (E4) without blocking.
+    let (events, corrupt) = limit_events::load_recent(
+        &state_dir.join(limit_events::LIMIT_EVENTS_FILE),
+        limit_events::STATUS_TAIL_ROWS,
+    );
+    if corrupt > 0 {
+        eprintln!(
+            "[bathos model status] W-LIMIT-CORRUPT — limit-events.jsonl 파손 행 {corrupt}개 건너뜀"
+        );
     }
 
     // AC9 comparison. Only a recorded plan gets a verdict; no plan = nothing to verify
@@ -2335,23 +2376,40 @@ fn run_status(
             .with_context(|| "model-status.json 저장 실패(verified 기록)")?;
     }
 
-    // Key store: existence + permission only — contents are never read (fingerprints and
-    // scan are M1's territory; this line exists so "did you even register the key?" is
-    // answerable next to the verification verdict).
+    // M3 AC7: banner mode replaces the report entirely — it renders the pending
+    // banner (consuming the latch) and nothing else. `--json` is ignored here:
+    // the banner IS the machine-readable payload the M6 hook relays.
+    if banner {
+        return run_status_banner(&mut status, &events, measured.as_str(), state_dir);
+    }
+
+    // Key store: existence + permission + fingerprint (M3 AC7 upgrades the M4
+    // existence-only summary by reusing M1's reader/fingerprint — the key value
+    // itself is still never printed). This line exists so "did you even register
+    // the key?" is answerable next to the verification verdict.
     let key_report: Vec<serde_json::Value> = ["glm", "kimi", "deepseek", "qwen"]
         .iter()
         .map(|name| {
-            let kf = bathos_dir
-                .map(|d| key_file_status(&d.join(format!("{name}.env"))))
-                .filter(|k| k.present);
+            let path = bathos_dir.map(|d| d.join(format!("{name}.env")));
+            let kf = path.as_deref().map(key_file_status).filter(|k| k.present);
+            let fingerprint = path
+                .as_deref()
+                .and_then(|p| key_store::read_key_file(p).ok())
+                .flatten()
+                .map(|(_, value)| key_store::fingerprint(&value));
             serde_json::json!({
                 "runtime": name,
                 "present": kf.is_some(),
                 "perm": kf.as_ref().and_then(|k| k.perm.map(|p| format!("{:o}", p))),
                 "perm_ok": kf.as_ref().map(|k| k.perm_ok).unwrap_or(false),
+                "fingerprint": fingerprint,
             })
         })
         .collect();
+
+    // M3 AC8: which credential path is configured and which one wins — the
+    // silence-failure guard. Details carry presence + fingerprint only.
+    let creds = credential_diagnostics(root, home_claude_dir().as_deref());
 
     if json {
         println!(
@@ -2369,6 +2427,23 @@ fn run_status(
                 })),
                 "transient_injection": status.transient_injection,
                 "key_store": key_report,
+                "credential_diagnostics": creds
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "rank": c.rank,
+                            "name": c.name,
+                            "configured": c.configured,
+                            "detail": c.detail,
+                            "winner": c.winner,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                "last_limit_event": status.last_limit_event,
+                "banner_pending": status.banner_pending,
+                "banner_shown_at": status.banner_shown_at,
+                "limit_recent": events.iter().rev().take(3).map(limit_summary_json).collect::<Vec<_>>(),
+                "limit_corrupt_skipped": corrupt,
                 "verify_note": "env 기준 판정 — 실제 접속 백엔드 확증은 아님 [V-12]",
             })
         );
@@ -2383,6 +2458,9 @@ fn run_status(
             measured.as_str(),
             base_url_display
         ),
+        // M3 AC7 "적용 모델 경로": whether a pin is set, never a catalog claim
+        // (alias mapping happens server-side; pin-vs-endpoint behavior is V-8).
+        format!("  적용 모델 경로    : {}", model_path_display()),
     ];
     match verification {
         Some((target, via, true)) => {
@@ -2423,9 +2501,13 @@ fn run_status(
         .iter()
         .map(|k| {
             let name = k["runtime"].as_str().unwrap_or("?");
+            let fp = k["fingerprint"]
+                .as_str()
+                .map(|f| format!(", {f}"))
+                .unwrap_or_default();
             match (k["present"].as_bool().unwrap_or(false), k["perm"].as_str()) {
-                (true, Some("600")) => format!("{name} ●(600)"),
-                (true, Some(p)) => format!("{name} ●({p}⚠chmod600권장)"),
+                (true, Some("600")) => format!("{name} ●(600{fp})"),
+                (true, Some(p)) => format!("{name} ●({p}{fp}⚠chmod600권장)"),
                 (true, None) => format!("{name} ●(권한미확인)"),
                 (false, _) => format!("{name} ○"),
             }
@@ -2433,17 +2515,417 @@ fn run_status(
         .collect::<Vec<_>>()
         .join("   ");
     out.push(format!(
-        "  키 스토어            : {key_human}   (존재·권한만 표시 — 내용 미읽음)"
+        "  키 스토어            : {key_human}   (존재·권한·지문만 표시 — 값 미출력)"
     ));
+
+    // M3 AC8: credential path diagnostics — winner line first with the ← marker,
+    // the rest condensed on one continuation line.
+    let cred_winner = creds.iter().find(|c| c.winner);
+    let mut cred_lines: Vec<String> = Vec::new();
+    if let Some(w) = cred_winner {
+        cred_lines.push(format!(
+            "{}={} ← 현재 이 경로가 우선(공식 우선순위 {}위)",
+            w.name, w.detail, w.rank_label
+        ));
+    }
+    let cred_others = creds
+        .iter()
+        .filter(|c| !c.winner)
+        .map(|c| format!("{}={}", c.name, c.detail))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    if !cred_others.is_empty() {
+        cred_lines.push(cred_others);
+    }
+    if let Some(first) = cred_lines.first() {
+        out.push(format!("  자격증명 진단    : {first}"));
+        for line in &cred_lines[1..] {
+            out.push(format!("                     {line}"));
+        }
+    }
+
+    // M3 AC7: newest limit event, with the guess suffix forced into "추정" wording.
+    out.push(match events.last() {
+        Some(e) => {
+            let ts_display =
+                e.ts.map(local_ts_display)
+                    .unwrap_or_else(|| "(시각 미기록)".to_string());
+            let mut line = format!("  최근 한도 이벤트 : {ts_display} {}", e.source);
+            if let Some(et) = &e.error_type {
+                line.push_str(&format!(" error_type={et}"));
+            }
+            line.push_str(&format!(
+                " ({})",
+                e.classified.as_deref().unwrap_or("미분류")
+            ));
+            if e.classified.as_deref() == Some(limit_events::CLASSIFIED_LIMIT_SUSPECT) {
+                match limit_events::guess_display(e.limit_kind_guess.as_deref()) {
+                    "" => line.push_str(" · 한도 종류 미판별"),
+                    display => line.push_str(&format!(" · {display}")),
+                }
+            }
+            line
+        }
+        None => "  최근 한도 이벤트 : 없음(기록 없음)".to_string(),
+    });
+    if status.banner_pending {
+        out.push(
+            "  ⚠ 배너 미표시 한도 이벤트 대기 중 — bathos model status --banner 로 확인하세요"
+                .to_string(),
+        );
+    }
+
+    // E15: Tier-S residue detected — the plaintext copy is still sitting in settings.
     if status.transient_injection.is_some() {
-        // E15: Tier-S residue detected — the plaintext copy is still sitting in settings.
         out.push(
             "  ⚠ 일시 키 사본 체류 중 — `bathos model switch claude --apply`로 소거하세요 (E15)"
                 .to_string(),
         );
+        // E14 companion: a shell env token would silently shadow the injected copy.
+        if env_nonempty("ANTHROPIC_AUTH_TOKEN").is_some() {
+            out.push(
+                "  ⚠ 셸 env ANTHROPIC_AUTH_TOKEN 설정됨 — 일시 주입 사본을 가릴 수 있음 (E14)"
+                    .to_string(),
+            );
+        }
     }
+
+    out.push("  안내             : 전환   bathos model switch <runtime> --apply".to_string());
+    out.push("                     복귀   bathos model switch claude --apply".to_string());
     println!("{}", out.join("\n"));
     Ok(0)
+}
+
+/// Banner rendering path (`model status --banner`, M3 AC7 — design §11's single
+/// text source). Renders the newest **banner-worthy** event when pending (a
+/// later `other` row must not displace a pending limit banner — E5 keeps the
+/// latch raised and shows the newest of its class), consumes the latch exactly
+/// once, and falls back to the model-switch banner (C) on explicit request.
+fn run_status_banner(
+    status: &mut model_status::ModelStatus,
+    events: &[limit_events::LimitEvent],
+    measured: &str,
+    state_dir: &Path,
+) -> Result<i32> {
+    if status.banner_pending {
+        let target = events
+            .iter()
+            .rev()
+            .find(|e| limit_events::banner_worthy(e.classified.as_deref()));
+        if let Some(e) = target {
+            let more = limit_events::count_banner_events_since(events, status.banner_shown_at)
+                .saturating_sub(1);
+            let ts_display =
+                e.ts.map(local_ts_display)
+                    .unwrap_or_else(|| "(시각 미기록)".to_string());
+            let text = match e.classified.as_deref() {
+                Some(limit_events::CLASSIFIED_QUOTA_RESUME) => limit_events::render_banner_b(e),
+                _ => limit_events::render_banner_a(e, measured, &ts_display, more),
+            };
+            println!("{text}");
+            // One exposure: latch down + shown-at stamp. A save failure here is a
+            // fatal I/O for this command (exit 1) — the banner already printed.
+            status.banner_pending = false;
+            status.banner_shown_at = Some(chrono::Utc::now());
+            status.updated = chrono::Utc::now();
+            model_status::save(state_dir, status)
+                .with_context(|| "model-status.json 저장 실패(banner 상태 기록)")?;
+            return Ok(0);
+        }
+    }
+    if let Some(e) = events.last() {
+        if e.classified.as_deref() == Some(limit_events::CLASSIFIED_MODEL_SWITCH) {
+            println!("{}", limit_events::render_banner_c());
+            return Ok(0);
+        }
+    }
+    eprintln!("[bathos model status] 표시 대기 중인 배너가 없습니다 (banner_pending=false)");
+    Ok(0)
+}
+
+/// `bathos model limit-record` (story M3, AC1/AC2) — the single Rust writer for
+/// limit telemetry (L9: bash must never write `_state/*.jsonl` directly). stdin
+/// is the raw hook payload; `raw` preserves it verbatim so later analysis never
+/// depends on this version's field guesses.
+///
+/// **Fail-safe by contract (AC1):** every failure path — unreadable stdin, bad
+/// JSON, unwritable state — prints to stderr and returns exit 0. A telemetry
+/// hiccup must never fail the session that triggered it. Deliberately NOT part
+/// of the audit HMAC chain (AC9): different integrity model, different consumers.
+fn run_limit_record(source_arg: &str, state_dir: &Path, base_url: Option<&str>) -> Result<i32> {
+    let debug = std::env::var("BATHOS_LIMIT_DEBUG").ok().as_deref() == Some("1");
+    let mut notes: Vec<String> = Vec::new();
+
+    let mut payload = String::new();
+    use std::io::Read as _;
+    if let Err(e) = std::io::stdin().read_to_string(&mut payload) {
+        eprintln!("[bathos model limit-record] stdin 읽기 실패 — 기록 건너뜀: {e}");
+        return Ok(0);
+    }
+    let trimmed = payload.trim();
+    if trimmed.is_empty() {
+        eprintln!("[bathos model limit-record] stdin payload가 비어 있어 기록하지 않았습니다");
+        return Ok(0);
+    }
+    let parsed: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[bathos model limit-record] payload JSON 파싱 실패 — 기록 건너뜀: {e}");
+            return Ok(0);
+        }
+    };
+
+    let (source, reason, anomaly) = resolve_source_arg(source_arg, &parsed);
+    notes.push(format!("source={source} ({reason})"));
+    // An anomalous source value is surfaced unconditionally (not just in debug
+    // mode) — a hook typo must be visible to whoever reads the hook's stderr.
+    if let Some(warning) = anomaly {
+        eprintln!("[bathos model limit-record] {warning}");
+    }
+
+    let measured = SessionBackend::detect_from_base_url(base_url);
+    let event = limit_events::build_event(&parsed, &source, measured.as_str(), chrono::Utc::now());
+    notes.push(format!(
+        "classified={}",
+        event.classified.as_deref().unwrap_or("?")
+    ));
+    notes.push(format!(
+        "limit_kind_guess={} (메시지 문자열 매칭 — 추정)",
+        event.limit_kind_guess.as_deref().unwrap_or("?")
+    ));
+
+    match limit_events::append_event(state_dir, &event) {
+        Ok(size) => {
+            notes.push(format!("파일 크기={size}바이트(누적)"));
+            if size > limit_events::SIZE_WARN_BYTES {
+                eprintln!(
+                    "[bathos model limit-record] W-LIMIT-SIZE — limit-events.jsonl {size}바이트(성장 경고, 로테이션은 스코프 밖 — 삭제는 사용자 결정)"
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("[bathos model limit-record] limit-events.jsonl 기록 실패(무시됨): {e}");
+            return Ok(0);
+        }
+    }
+
+    let mut status = model_status::load(state_dir).0;
+    limit_events::apply_to_status(&mut status, &event, measured, chrono::Utc::now());
+    if let Err(e) = model_status::save(state_dir, &status) {
+        eprintln!("[bathos model limit-record] model-status.json 갱신 실패(무시됨): {e}");
+    }
+
+    if debug {
+        for n in &notes {
+            eprintln!("[bathos model limit-record][debug] {n}");
+        }
+    }
+    Ok(0)
+}
+
+/// `--source` resolution: explicit event names pass through, `auto` infers from
+/// the payload, and an unknown value degrades to `manual` (recorded + warned)
+/// rather than dropping the event — the raw payload is the source of truth.
+/// The third element is a user-facing anomaly note (None = nothing to warn).
+fn resolve_source_arg(arg: &str, payload: &serde_json::Value) -> (String, String, Option<String>) {
+    match arg {
+        "auto" => {
+            let (s, r) = limit_events::auto_source(payload);
+            (s, r, None)
+        }
+        "manual" => (
+            limit_events::SOURCE_MANUAL.into(),
+            "--source manual 명시".into(),
+            None,
+        ),
+        limit_events::SOURCE_STOP_FAILURE
+        | limit_events::SOURCE_NOTIFICATION
+        | limit_events::SOURCE_PRE_MODEL_SWITCH
+        | limit_events::SOURCE_POST_MODEL_SWITCH => {
+            (arg.to_string(), format!("--source {arg} 명시"), None)
+        }
+        other => (
+            limit_events::SOURCE_MANUAL.into(),
+            format!("알 수 없는 --source 값 '{other}' — manual로 기록"),
+            Some(format!(
+                "알 수 없는 --source 값 '{other}' — manual로 기록(행의 raw로 사후 구분 가능)"
+            )),
+        ),
+    }
+}
+
+/// M3 AC7 "적용 모델 경로": pin state only — the alias mapping itself happens
+/// server-side, and pin-across-endpoint behavior is unconfirmed (V-8), so the
+/// line claims neither.
+fn model_path_display() -> String {
+    match env_nonempty("ANTHROPIC_MODEL") {
+        Some(pin) => {
+            format!("핀 지정: ANTHROPIC_MODEL={pin} (호환 엔드포인트 동작은 [미확인 V-8])")
+        }
+        None => "핀 없음 — 프로바이더 별칭 매핑/Claude 기본 모델 적용".to_string(),
+    }
+}
+
+/// Local-time rendering for event timestamps (draft shows wall-clock + zone).
+fn local_ts_display(ts: chrono::DateTime<chrono::Utc>) -> String {
+    use chrono::{Local, TimeZone};
+    Local
+        .timestamp_opt(ts.timestamp(), 0)
+        .single()
+        .map(|l| l.format("%Y-%m-%d %H:%M %Z").to_string())
+        .unwrap_or_else(|| ts.to_rfc3339())
+}
+
+/// Compact ledger summary for the `--json` view (newest-first caller).
+fn limit_summary_json(e: &limit_events::LimitEvent) -> serde_json::Value {
+    serde_json::json!({
+        "ts": e.ts,
+        "source": e.source,
+        "error_type": e.error_type,
+        "classified": e.classified,
+        "limit_kind_guess": e.limit_kind_guess,
+    })
+}
+
+/// Env var that counts as "configured" only when it holds a non-blank value —
+/// an empty string is "unset" for auth fallback purposes (M5 measurement).
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+fn truthy_flag(v: &str) -> bool {
+    !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false"))
+}
+
+/// One credential-path diagnostic row (AC8). `detail` never contains a value —
+/// presence + 8-hex fingerprint only; the M1 no-material invariant extends to
+/// env credentials because "did my key leak into a terminal?" is exactly the
+/// question this table answers.
+struct CredEntry {
+    rank: u8,
+    rank_label: String,
+    name: &'static str,
+    configured: bool,
+    detail: String,
+    winner: bool,
+}
+
+/// The L15 official priority order, evaluated top-down: first configured path
+/// wins. Ranks 6-7 (profile / subscription OAuth) have no documented
+/// machine-checkable marker — they are reported as the honest fallback instead
+/// of being invented into env probes.
+fn credential_diagnostics(root: &Path, home_claude: Option<&Path>) -> Vec<CredEntry> {
+    let mut entries: Vec<CredEntry> = Vec::new();
+
+    // 1 — Cloud provider switches (the official "Cloud provider" rank).
+    let cloud = [
+        ("CLAUDE_CODE_USE_BEDROCK", "Bedrock"),
+        ("CLAUDE_CODE_USE_VERTEX", "Vertex"),
+    ]
+    .iter()
+    .find(|(var, _)| env_nonempty(var).is_some_and(|v| truthy_flag(&v)))
+    .map(|(_, label)| *label);
+    entries.push(CredEntry {
+        rank: 1,
+        rank_label: "1".into(),
+        name: "Cloud(Bedrock/Vertex)",
+        configured: cloud.is_some(),
+        detail: cloud
+            .map(|l| format!("설정됨({l})"))
+            .unwrap_or_else(|| "미설정".into()),
+        winner: false,
+    });
+
+    // 2 / 3 / 5 — env token paths: fingerprint only, never the value.
+    for (rank, name, var) in [
+        (2u8, "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"),
+        (3, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+        (5, "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
+    ] {
+        let detail = match env_nonempty(var) {
+            Some(v) => format!("설정됨(지문 {})", key_store::fingerprint(&v)),
+            None => "미설정".into(),
+        };
+        entries.push(CredEntry {
+            rank,
+            rank_label: rank.to_string(),
+            name,
+            configured: detail.starts_with("설정됨"),
+            detail,
+            winner: false,
+        });
+    }
+
+    // 4 — apiKeyHelper, checked per settings scope (highest precedence first).
+    let helper = find_api_key_helper(root, home_claude);
+    entries.push(CredEntry {
+        rank: 4,
+        rank_label: "4".into(),
+        name: "apiKeyHelper",
+        configured: helper.is_some(),
+        detail: helper
+            .map(|l| format!("등록({l})"))
+            .unwrap_or_else(|| "미등록".into()),
+        winner: false,
+    });
+
+    // 6~7 — no machine-checkable marker; the fallback the other ranks defer to.
+    let any_above = entries.iter().any(|c| c.configured);
+    entries.push(CredEntry {
+        rank: 6,
+        rank_label: "6~7".into(),
+        name: "profile·구독 OAuth",
+        configured: !any_above,
+        detail: if any_above {
+            "—(상위 경로가 이김)".into()
+        } else {
+            "이 경로로 진행(폴백 — 기계 확인 경로 없음)".into()
+        },
+        winner: false,
+    });
+
+    if let Some(w) = entries.iter_mut().find(|c| c.configured) {
+        w.winner = true;
+    }
+    entries
+}
+
+/// Settings scopes checked highest-precedence-first for a non-blank top-level
+/// `apiKeyHelper`. Unparseable files are skipped (a broken settings file must
+/// not fabricate a "helper configured" answer) — E3's no-overwrite rule is
+/// untouched here since this is read-only diagnosis.
+fn find_api_key_helper(root: &Path, home_claude: Option<&Path>) -> Option<String> {
+    let mut candidates: Vec<(PathBuf, &str)> = vec![
+        (
+            root.join(".claude/settings.local.json"),
+            "settings.local.json",
+        ),
+        (root.join(".claude/settings.json"), "settings.json"),
+    ];
+    if let Some(h) = home_claude {
+        candidates.push((h.join("settings.json"), "~/.claude/settings.json"));
+    }
+    for (path, label) in candidates {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if v.get("apiKeyHelper")
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| !s.trim().is_empty())
+        {
+            return Some(label.to_string());
+        }
+    }
+    None
+}
+
+/// `~/.claude` for user-scope settings lookups (same HOME discipline as
+/// [`home_bathos_dir`] — `None` simply skips the user scope).
+fn home_claude_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude"))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4276,9 +4758,11 @@ mod tests {
         // Match: env says glm → verified=true persisted, exit 0.
         let code = run_status(
             false,
+            false,
             state.path(),
             None,
             Some("https://api.z.ai/api/anthropic"),
+            Path::new("."),
         )
         .unwrap();
         assert_eq!(code, 0);
@@ -4287,7 +4771,7 @@ mod tests {
         assert_eq!(loaded.session_backend, SessionBackend::Glm);
 
         // Mismatch: env back to unset-claude → verified flips false, still exit 0.
-        let code = run_status(false, state.path(), None, None).unwrap();
+        let code = run_status(false, false, state.path(), None, None, Path::new(".")).unwrap();
         assert_eq!(code, 0);
         let (loaded, _) = ms::load(state.path());
         assert!(!loaded.last_switch_plan.as_ref().unwrap().verified);
@@ -4298,11 +4782,63 @@ mod tests {
         let state = TempDir::new().unwrap();
         let keys = TempDir::new().unwrap();
         write_key_file(keys.path(), "kimi", 0o644);
-        let code = run_status(true, state.path(), Some(keys.path()), None).unwrap();
+        let code = run_status(
+            true,
+            false,
+            state.path(),
+            Some(keys.path()),
+            None,
+            Path::new("."),
+        )
+        .unwrap();
         assert_eq!(code, 0);
         assert!(
             !state.path().join("model-status.json").exists(),
             "no plan → nothing to verify → no write"
         );
+    }
+
+    // ── M3: banner mode + credential diagnostics ────────────────────────────
+
+    #[test]
+    fn banner_mode_without_pending_renders_nothing_and_stays_read_only() {
+        let state = TempDir::new().unwrap();
+        let code = run_status(false, true, state.path(), None, None, Path::new(".")).unwrap();
+        assert_eq!(code, 0);
+        assert!(
+            !state.path().join("model-status.json").exists(),
+            "nothing pending → banner mode must not create/write anything"
+        );
+    }
+
+    #[test]
+    fn credential_diagnostics_marks_helper_winner_and_never_leaks_values() {
+        let root = TempDir::new().unwrap();
+        let claude_dir = root.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        std::fs::write(
+            claude_dir.join("settings.local.json"),
+            r#"{"apiKeyHelper": "/path/to/HELPER-SCRIPT-VALUE", "env": {}}"#,
+        )
+        .unwrap();
+
+        // Env paths unset in the test process → helper (rank 4) wins.
+        std::env::remove_var("ANTHROPIC_AUTH_TOKEN");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        let entries = credential_diagnostics(root.path(), None);
+        assert_eq!(entries.len(), 6, "ranks 1-5 + the 6~7 fallback row");
+        let helper = entries.iter().find(|c| c.rank == 4).unwrap();
+        assert!(helper.configured && helper.winner);
+        assert_eq!(helper.detail, "등록(settings.local.json)");
+        // The helper's value is a stand-in secret — it must never appear anywhere.
+        let rendered = entries
+            .iter()
+            .map(|c| format!("{} {} {}", c.name, c.detail, c.rank_label))
+            .collect::<Vec<_>>()
+            .join("|");
+        assert!(!rendered.contains("HELPER-SCRIPT-VALUE"), "{rendered}");
+        // Fallback row reports itself as the path only when nothing above is set.
+        let fallback = entries.iter().find(|c| c.rank == 6).unwrap();
+        assert!(!fallback.configured && !fallback.winner);
     }
 }

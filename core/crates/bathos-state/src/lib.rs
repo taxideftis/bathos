@@ -45,6 +45,7 @@ pub mod audit;
 pub mod error;
 pub mod fingerprint;
 pub mod key_store;
+pub mod limit_events;
 pub mod model;
 pub mod model_plan;
 pub mod model_status;
