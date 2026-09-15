@@ -56,7 +56,10 @@ fi
 # --------------------------------------------------------------------------
 # 3. 위험 패턴 목록
 # --------------------------------------------------------------------------
-# 각 원소: ERE(Extended Regular Expression), grep -Eiq 로 검사
+# 각 원소: ERE(Extended Regular Expression), grep -Eiq 로 검사 — **대소문자 무시**.
+# ⚠️ 대소문자가 의미를 갖는 패턴은 이 배열이 아니라 아래 DANGER_PATTERNS_CS 에 둔다.
+#    (예: `git branch -D`는 강제 삭제지만 `-d`는 머지된 브랜치만 지우는 안전 삭제다.
+#     여기에 두면 -i 탓에 안전한 쪽까지 차단된다 — #39)
 DANGER_PATTERNS=(
   # --- 파일시스템 파괴 ---
   'rm[[:space:]]+-[[:alpha:]]*r[[:alpha:]]*f([[:space:]]|$)'  # rm -rf, rm -fr, rm -Rf 등
@@ -77,14 +80,8 @@ DANGER_PATTERNS=(
   'TRUNCATE[[:space:]]+TABLE'                                  # TRUNCATE (전체 삭제, 롤백 불가)
   # DELETE without WHERE는 ERE 단일 패턴으로 정확히 표현 불가 → 섹션 4b에서 2단계 검사
 
-  # --- git 파괴적 명령 ---
-  'git[[:space:]]+push[[:space:]].*--force'                   # git push --force
-  'git[[:space:]]+push[[:space:]].*-f([[:space:]]|$)'         # git push -f
-  'git[[:space:]]+push[[:space:]].*-f[[:space:]]'             # git push -f <remote>
-  'git[[:space:]]+reset[[:space:]]+--hard'                    # git reset --hard
-  'git[[:space:]]+checkout[[:space:]]+-[Bf]'                  # git checkout -B/-f
-  'git[[:space:]]+clean[[:space:]]+-f'                        # git clean -f (미추적 파일 삭제)
-  'git[[:space:]]+branch[[:space:]]+-D'                       # git branch -D (강제 삭제)
+  # --- git 파괴적 명령 → DANGER_PATTERNS_CS 로 이전(#39) ---
+  #   git 플래그는 대소문자가 곧 의미라 -i 검사에 둘 수 없다.
 
   # --- 권한/소유권 위험 ---
   'chmod[[:space:]]+-R[[:space:]]+777'                         # chmod -R 777
@@ -114,6 +111,26 @@ DANGER_PATTERNS=(
 )
 
 # --------------------------------------------------------------------------
+# 3b. 대소문자 구분 패턴 (#39)
+# --------------------------------------------------------------------------
+# 위 DANGER_PATTERNS 는 SQL(`drop table`)을 잡으려고 -i 로 검사한다. 그런데 그 -i 가
+# 배열 전체에 걸려, 대소문자로 위험도가 갈리는 git 플래그까지 싸잡아 차단했다:
+#   git checkout -b (새 브랜치 생성)      ← -B(강제 덮어쓰기)로 오인
+#   git branch  -d (머지된 것만 안전 삭제) ← -D(강제 삭제)로 오인
+# `-d` 는 등가 대체가 없어, 안전 삭제를 하려면 더 위험한 `-D` 를 쓰라고 안내하게 된다 —
+# 가드 의도와 정반대다. 그래서 이 배열만 grep -Eq(대소문자 구분)로 따로 검사한다.
+#   판단 기준: 플래그의 대소문자가 위험도를 가르면 여기, 아니면 위.
+DANGER_PATTERNS_CS=(
+  'git[[:space:]]+push[[:space:]].*--force'                   # git push --force
+  'git[[:space:]]+push[[:space:]].*-f([[:space:]]|$)'         # git push -f
+  'git[[:space:]]+push[[:space:]].*-f[[:space:]]'             # git push -f <remote>
+  'git[[:space:]]+reset[[:space:]]+--hard'                    # git reset --hard
+  'git[[:space:]]+checkout[[:space:]]+-[Bf]'                  # git checkout -B/-f (-b 는 통과)
+  'git[[:space:]]+clean[[:space:]]+-f'                        # git clean -f (미추적 파일 삭제)
+  'git[[:space:]]+branch[[:space:]]+-D'                       # git branch -D (-d 는 통과)
+)
+
+# --------------------------------------------------------------------------
 # 4. 패턴 검사
 # --------------------------------------------------------------------------
 DETECTED_PATTERN=""
@@ -123,6 +140,16 @@ for PATTERN in "${DANGER_PATTERNS[@]}"; do
     break
   fi
 done
+
+# 4a. 대소문자 구분 검사 (#39) — -i 없음
+if [[ -z "$DETECTED_PATTERN" ]]; then
+  for PATTERN in "${DANGER_PATTERNS_CS[@]}"; do
+    if printf '%s' "$CMD" | grep -Eq "$PATTERN"; then
+      DETECTED_PATTERN="$PATTERN"
+      break
+    fi
+  done
+fi
 
 # --------------------------------------------------------------------------
 # 4b. WHERE 없는 DELETE 2단계 검사 (L-4 보강, 2026-06-30)

@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`careful-guard.sh` 가 안전한 git 플래그까지 차단하던 문제** (#39). 위험 패턴 검사가
+  `grep -Eiq` 로 배열 **전체**를 대소문자 무시로 검사하고 있었다. SQL(`drop table`)을 잡으려면
+  `-i` 가 필요하지만, git 플래그는 대소문자가 곧 위험도라 같은 검사에 둘 수 없었다.
+  그 결과 `git checkout -b`(새 브랜치 생성)가 `-B`(강제 덮어쓰기)로, `git branch -d`
+  (머지된 것만 지우는 안전 삭제)가 `-D`(강제 삭제)로 오인돼 차단됐다. `-d` 는 등가 대체가
+  없어 **안전 삭제를 하려면 더 위험한 `-D` 를 쓰라고 안내하게 되는** 역전이 생겼다.
+  - git 플래그 7개를 `DANGER_PATTERNS_CS` 로 분리해 `grep -Eq`(대소문자 구분)로 따로
+    검사한다. SQL·경로 우회 패턴은 `-i` 검사를 그대로 유지한다.
+  - 판단 기준을 주석에 명문화했다 — **플래그의 대소문자가 위험도를 가르면 CS 배열**.
+  - 훅 하네스에 회귀 케이스 6건 추가(`-b`/`-d` 통과 · `-B`/`-D`/`clean -f` 차단 ·
+    소문자 `drop table` 차단으로 `-i` 유지 확인).
+
 ## [0.4.0] — 2026-09-10
 
 Everything accumulated since 0.1.0 is released under this version. The 0.2.0 and
