@@ -18,6 +18,7 @@
       "docs": "https://docs.claude.com/en/docs/claude-code",
       "notes": "BATHOS 기본 런타임. 역할 base frontmatter 의 `model` 값이 그대로 쓰인다.",
       "models": [
+        { "id": "claude-opus-5-5", "tier": "flagship", "verified": true, "source": "저장소 내 사실 — .claude/agents/_base/*.md frontmatter (2026-09-30 전 역할 통일, User 결정)" },
         { "id": "claude-fable-5",  "tier": "flagship", "verified": true, "source": "저장소 내 사실 — .claude/agents/_base/*.md frontmatter" },
         { "id": "claude-sonnet-5", "tier": "balanced", "verified": true, "source": "저장소 내 사실 — .claude/agents/_base/*.md frontmatter" },
         { "id": "opus",   "tier": "alias", "verified": true, "source": "저장소 내 사실 — docs/glm-backend-kr.md §2 (별칭은 호환 레이어 매핑에 쓰임)" },

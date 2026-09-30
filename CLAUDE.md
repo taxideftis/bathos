@@ -25,26 +25,26 @@
 
 | # | 이름 | 역할 | 모델 | 웨이브 |
 |---|------|------|------|--------|
-| 0 | Paul | 총괄/리드/최종 confirm (30년차, Google 1억 유저, 2회 Exit) | Fable 5 | 전 웨이브(메인 세션) |
-| 1 | John | Reverse Specialist | Fable 5 | W1 (+W0 보조) |
-| 2 | Caleb | 시장분석/USP (+W0 Analyst 겸임) | Fable 5 | W1 (+W0) |
-| 3 | Joshua | 서비스 기획(USP/Core Feature/User·Service Story) | Fable 5 | W2(게이트) |
-| 4 | James | SW·클라우드 아키텍트 Guru | Fable 5 | W2 |
-| 5 | Mark | IP Specialist(특허 출원명세, 25년차) | Fable 5 | W4(플러그) |
-| 6 | Nathanael | 논문 Abstract/Introduction | Sonnet 5 | W4(플러그) |
-| 7 | Jonnathan | 수석 디자이너(UX Flow Map/UI) | Fable 5 | W2 |
-| 8 | Phillip | 백엔드·데이터 수석(20년차) | Sonnet 5 | W5 |
-| 9 | Andrew | 프론트·모바일 수석(20년차) | Sonnet 5 | W5 |
-| 10 | Stephen | AI/ML 수석(25년차, Stanford·Google·Facebook) | Sonnet 5 | W5 |
-| 11 | Timothy | 개발 정의 문서화 | Sonnet 5 | W6 (+W3 보조) |
-| 12 | Thomas | 코드 리뷰어(전 Google·Uber 15년) | Sonnet 5 | W6 (+W3 독립 리뷰) |
-| 13 | Michael | Security Specialist — 방어적 웹·사이버 보안 감사·하드닝(CWE/OWASP/CVSS·SARIF, 무해성·승인 경계·인간 승인 게이트) | Sonnet 5 | W6 (Thomas 리뷰 이후) |
-| 14 | Hananiah | Refactoring Specialist — Thomas 리뷰 냉정 재평가 + 동작보존 리팩토링(기능변경·버그수정 범위 밖) | Sonnet 5 | W6 (Michael 보안 이후) |
-| 15 | Matthias | QA/검증(Test Case·Flow, E2E) | Sonnet 5 | W6 (+W3 독립 리뷰) |
-| 16 | Martin | 모니터링/HTML 리포트 | Sonnet 5 | W6(취합) |
-| **17** | **Matthew** | Scrum Master/Story Engineer — W2 산출을 자족 dev 스토리파일로 응축 + Readiness Gate | Fable 5 | **W3(전용, 평시 비가동)** |
+| 0 | Paul | 총괄/리드/최종 confirm (30년차, Google 1억 유저, 2회 Exit) | Opus 5.5 | 전 웨이브(메인 세션) |
+| 1 | John | Reverse Specialist | Opus 5.5 | W1 (+W0 보조) |
+| 2 | Caleb | 시장분석/USP (+W0 Analyst 겸임) | Opus 5.5 | W1 (+W0) |
+| 3 | Joshua | 서비스 기획(USP/Core Feature/User·Service Story) | Opus 5.5 | W2(게이트) |
+| 4 | James | SW·클라우드 아키텍트 Guru | Opus 5.5 | W2 |
+| 5 | Mark | IP Specialist(특허 출원명세, 25년차) | Opus 5.5 | W4(플러그) |
+| 6 | Nathanael | 논문 Abstract/Introduction | Opus 5.5 | W4(플러그) |
+| 7 | Jonnathan | 수석 디자이너(UX Flow Map/UI) | Opus 5.5 | W2 |
+| 8 | Phillip | 백엔드·데이터 수석(20년차) | Opus 5.5 | W5 |
+| 9 | Andrew | 프론트·모바일 수석(20년차) | Opus 5.5 | W5 |
+| 10 | Stephen | AI/ML 수석(25년차, Stanford·Google·Facebook) | Opus 5.5 | W5 |
+| 11 | Timothy | 개발 정의 문서화 | Opus 5.5 | W6 (+W3 보조) |
+| 12 | Thomas | 코드 리뷰어(전 Google·Uber 15년) | Opus 5.5 | W6 (+W3 독립 리뷰) |
+| 13 | Michael | Security Specialist — 방어적 웹·사이버 보안 감사·하드닝(CWE/OWASP/CVSS·SARIF, 무해성·승인 경계·인간 승인 게이트) | Opus 5.5 | W6 (Thomas 리뷰 이후) |
+| 14 | Hananiah | Refactoring Specialist — Thomas 리뷰 냉정 재평가 + 동작보존 리팩토링(기능변경·버그수정 범위 밖) | Opus 5.5 | W6 (Michael 보안 이후) |
+| 15 | Matthias | QA/검증(Test Case·Flow, E2E) | Opus 5.5 | W6 (+W3 독립 리뷰) |
+| 16 | Martin | 모니터링/HTML 리포트 | Opus 5.5 | W6(취합) |
+| **17** | **Matthew** | Scrum Master/Story Engineer — W2 산출을 자족 dev 스토리파일로 응축 + Readiness Gate | Opus 5.5 | **W3(전용, 평시 비가동)** |
 
-> **모델 지정:** 각 역할의 `model` 필드는 전체 모델 ID로 고정 — 구 Opus 역할 → `claude-fable-5`(Fable 5), 구 Sonnet 역할 → `claude-sonnet-5`(Sonnet 5). (2026-07-02 전환, User 결정)
+> **모델 지정:** 각 역할의 `model` 필드는 전체 모델 ID로 고정 — **전 역할 `claude-opus-5-5`(Opus 5.5)로 통일** (2026-09-30, User 결정). Codex 표면은 전 역할 `gpt-5.6-sol`/`high`로 매핑. (이전: 구 Opus 역할 `claude-fable-5`, 구 Sonnet 역할 `claude-sonnet-5` — 2026-07-02)
 
 ---
 
