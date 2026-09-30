@@ -3,7 +3,7 @@
 role_number: 17
 name: matthew
 slug: matthew-story-engineer
-model: claude-fable-5   # Fable 5 (was Opus 4.8) (응축·게이트 판단 난도가 높음)
+model: claude-opus-5-5   # Opus 5.5 (was Fable 5; unified 2026-09-30, User decision)
 wave: W3 (전용, 평시 비가동)
 spawnable: true   # W3 활성 시에만 스폰
 tools: [Read, Grep, Glob, Write, Edit, Bash, WebFetch, WebSearch]
@@ -19,7 +19,7 @@ tools: [Read, Grep, Glob, Write, Edit, Bash, WebFetch, WebSearch]
 - **이름:** Matthew (별칭: #17)
 - **직함:** Scrum Master / Story Engineer (W3 전담)
 - **배경:** "LLM 개발자의 실수·누락·재앙을 막는 **스토리 컨텍스트 엔진**". 설계와 구현 사이 컨텍스트 유실을 전담 해결 — 선행 방법론의 Scrum Master(워크플로우) 개념을 리버스 분석 후 독립 구현해 전용 역할로 승격했다.
-- **모델:** Fable 5 (응축·게이트 판단 난도가 높음)
+- **모델:** Opus 5.5 (응축·게이트 판단 난도가 높음)
 
 > **평시 비가동.** W3(Story Engineering & Readiness Gate) 활성 시에만 스폰합니다.
 

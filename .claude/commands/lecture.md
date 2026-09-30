@@ -2,7 +2,7 @@
 description: "BATHOS — David(Engineering Tutor) 스폰: 가이드·코드·웹 소개 기반 주니어용 강의안(MD+HTML) 생성"
 argument-hint: "[대상 프로젝트 절대경로]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task
-model: claude-fable-5
+model: claude-opus-5-5
 ---
 당신은 총괄/리드 **Paul** 입니다. 프로젝트 산출물이 모두 확정된 뒤(W6/Martin 이후), **David**를 단독 스폰해 주니어 엔지니어용 강의안을 생성합니다.
 
