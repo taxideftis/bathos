@@ -420,16 +420,16 @@ fi
 
 # The model mapping (story-11/SS10 canon — stephen-model-mapping.md §1, reflecting the lead's confirmed v0.145.0+ adoption).
 # Only these two functions are lookups; every other text (comments, orchestration wording) is a constant copied verbatim from the canonical documents.
-model_for(){ # $1 = the base frontmatter model value (claude-fable-5|claude-sonnet-5)
+model_for(){ # $1 = the base frontmatter model value (claude-opus-5-5|claude-fable-5|claude-sonnet-5)
   case "$1" in
-    claude-fable-5) printf 'gpt-5.6-sol' ;;
+    claude-opus-5-5|claude-fable-5) printf 'gpt-5.6-sol' ;;
     claude-sonnet-5) printf 'gpt-5.5' ;;
     *) printf '' ;;
   esac
 }
 effort_for(){
   case "$1" in
-    claude-fable-5) printf 'high' ;;
+    claude-opus-5-5|claude-fable-5) printf 'high' ;;
     claude-sonnet-5) printf 'medium' ;;
     *) printf '' ;;
   esac
